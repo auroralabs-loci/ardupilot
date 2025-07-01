@@ -217,6 +217,7 @@ class TestBuildOptions(object):
                     'AP_PROXIMITY_MR72_ENABLED',    # this shares symbols with AP_PROXIMITY_HEXSOONRADAR_ENABLED
                     'AP_RANGEFINDER_NRA24_CAN_ENABLED',
                     'AP_RANGEFINDER_HEXSOONRADAR_ENABLED',
+                    'AP_MOTORS_FRAME_SCRIPTING_MATRIX_ENABLED',  # no symbol in code
                 ])
                 if target.lower() == 'sub':
                     # ArduSub has its own ModeAlthold, which is unrelated
@@ -294,6 +295,7 @@ class TestBuildOptions(object):
             'AP_COMPASS_LSM303D_ENABLED',  # probed on a board-by-board basis, not on CubeOrange for example
             'AP_BARO_THST_COMP_ENABLED',  # compiler is optimising this symbol away
             'AP_GPS_DEBUG_LOGGING_ENABLED',  # must have a backend compiled in to be present
+            'AP_MOTORS_FRAME_SCRIPTING_MATRIX_ENABLED',  # no symbol in code
         ])
         if target.lower() != "copter":
             feature_define_whitelist.add('MODE_ALTHOLD_ENABLED')
@@ -322,6 +324,8 @@ class TestBuildOptions(object):
             feature_define_whitelist.add('AP_COPTER_CUSTOMCONTROL_ENABLED')
             feature_define_whitelist.add('AP_RC_TRANSMITTER_TUNING_ENABLED')
             feature_define_whitelist.add('AP_AVOIDANCE_ALTHOLD_ENABLED')
+            feature_define_whitelist.add(r'AP_MOTORS_COAX_ENABLED')
+            feature_define_whitelist.add(r'AP_MOTORS_SINGLE_ENABLED')
 
         if target.lower() in ['antennatracker', 'blimp', 'sub', 'plane', 'copter']:
             # plane has a dependency for AP_Follow which is not
@@ -349,6 +353,7 @@ class TestBuildOptions(object):
             feature_define_whitelist.add('AP_QUICKTUNE_ENABLED')
             feature_define_whitelist.add('AP_PLANE_SYSTEMID_ENABLED')
             feature_define_whitelist.add('AP_PLANE_CUSTOMCONTROL_ENABLED')
+            feature_define_whitelist.add(r'AP_MOTORS_TAILSITTER_ENABLED')
 
         if target.lower() not in ["plane", "copter"]:
             feature_define_whitelist.add('HAL_ADSB_ENABLED')
