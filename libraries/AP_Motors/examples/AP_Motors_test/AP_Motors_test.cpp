@@ -27,7 +27,9 @@ void stability_test();
 void update_motors();
 void print_all_motors();
 void print_motor_matrix(uint8_t frame_class, uint8_t frame_type);
+#if AP_MOTORS_TRI_ENABLED
 void print_motor_tri(uint8_t frame_class, uint8_t frame_type);
+#endif  // AP_MOTORS_TRI_ENABLED
 
 // Instantiate a few classes that will be needed so that the singletons can be called from the motors lib
 #if HAL_WITH_ESC_TELEM
@@ -42,7 +44,9 @@ AP_BattMonitor _battmonitor{0, nullptr, nullptr};
 AP_Motors *motors;
 AP_MotorsHeli *motors_heli;
 AP_MotorsMatrix *motors_matrix;
+#if AP_MOTORS_TRI_ENABLED
 AP_MotorsTri *motors_tri;
+#endif  // AP_MOTORS_TRI_ENABLED
 
 bool thrust_boost = false;
 
@@ -171,9 +175,15 @@ void setup()
 
                 switch (frame_class) {
 
+#if AP_MOTORS_FRAME_QUAD_ENABLED
                     case AP_Motors::MOTOR_FRAME_QUAD:
+#endif  // AP_MOTORS_FRAME_QUAD_ENABLED
+#if AP_MOTORS_FRAME_HEXA_ENABLED
                     case AP_Motors::MOTOR_FRAME_HEXA:
+#endif  // AP_MOTORS_FRAME_HEXA_ENABLED
+#if AP_MOTORS_FRAME_OCTA_ENABLED
                     case AP_Motors::MOTOR_FRAME_OCTA:
+#endif  // AP_MOTORS_FRAME_OCTA_ENABLED
                         motors_matrix = new AP_MotorsMatrix(400);
                         motors = motors_matrix;
                         break;
@@ -276,9 +286,11 @@ void setup()
             if (motors_matrix == nullptr) {
                 motors_matrix = new AP_MotorsMatrix(400);
             }
+#if AP_MOTORS_TRI_ENABLED
             if (motors_tri == nullptr) {
                 motors_tri = new AP_MotorsTri(400);
             }
+#endif  // AP_MOTORS_TRI_ENABLED
             print_all_motors();
 
         } else {
@@ -353,21 +365,26 @@ void print_all_motors()
 
     first_layout = true;
 
+#if AP_MOTORS_FRAME_DECA_ENABLED
     for (uint8_t frame_class=0; frame_class <= AP_Motors::MOTOR_FRAME_DECA; frame_class++) {
         for (uint8_t frame_type=0; frame_type < AP_Motors::MOTOR_FRAME_TYPE_Y4; frame_type++) {
+#if AP_MOTORS_FRAME_TRI_ENABLED
             if (frame_class == AP_Motors::MOTOR_FRAME_TRI) {
                 print_motor_tri(frame_class, frame_type);
-            } else {
-                print_motor_matrix(frame_class, frame_type);
+                continue;
             }
+#endif  // AP_MOTORS_FRAME_TRI_ENABLED
+            print_motor_matrix(frame_class, frame_type);
         }
     }
+#endif  // AP_MOTORS_FRAME_DECA_ENABLED
 
     hal.console->printf("\n");
     hal.console->printf("\t]\n");
     hal.console->printf("}\n");
 }
 
+#if AP_MOTORS_TRI_ENABLED
 void print_motor_tri(uint8_t frame_class, uint8_t frame_type)
 {
     char frame_and_type_string[30];
@@ -421,6 +438,7 @@ void print_motor_tri(uint8_t frame_class, uint8_t frame_type)
 
     }
 }
+#endif  // AP_MOTORS_TRI_ENABLED
 
 void print_motor_matrix(uint8_t frame_class, uint8_t frame_type)
 {
