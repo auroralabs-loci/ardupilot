@@ -9,8 +9,14 @@ on:
 jobs:
   loci:
     if: vars.UPSTREAM_REPO != ''
+    # Deliberately NOT run in ardupilot/ardupilot-dev-chibios. The LOCI action's
+    # common step uses actions/setup-python, and the tool-cache interpreter it
+    # selects is unusable inside a container: GitHub mounts the host cache at
+    # /__t, but the cached CPython's console scripts carry a shebang baked to
+    # the host path /opt/hostedtoolcache/..., which does not exist in the
+    # container. execve then fails with ENOENT against pip. Installing the
+    # toolchain straight onto the runner avoids the whole problem.
     runs-on: ubuntu-22.04
-    container: ardupilot/ardupilot-dev-chibios:v0.2.0
 
     env:
       LOCI_PROJECT: 'ardupilot'
@@ -21,7 +27,6 @@ jobs:
       LOCI_BOARD: ${{ vars.LOCI_BOARD || 'Durandal' }}
       LOCI_VEHICLE: ${{ vars.LOCI_VEHICLE || 'copter' }}
       LOCI_BINARY: ${{ vars.LOCI_BINARY || 'arducopter' }}
-      GCC_VERSION: '10'
 
     environment: ${{ vars.LOCI_ENV || 'PROD__AL_DEMO' }}
 
@@ -32,10 +37,6 @@ jobs:
           fetch-depth: 0
           submodules: 'recursive'
           ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
-
-      - name: Mark workspace safe for git
-        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-        shell: bash -euo pipefail {0}
 
       - name: Compute target
         id: target
@@ -51,8 +52,8 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git remote add upstream "https://github.com/${{ vars.UPSTREAM_REPO }}.git" 2>/dev/null || true
-          # Resolve the upstream default branch with plain git: the ArduPilot dev
-          # container has no `gh` CLI, and this needs no token for a public repo.
+          # Resolve the upstream default branch with plain git: no token needed
+          # for a public repo, and no dependency on the gh CLI being present.
           upstream_default=$(git ls-remote --symref upstream HEAD \
             | awk '/^ref:/ { sub("refs/heads/", "", $2); print $2; exit }')
           echo "Upstream default branch: ${upstream_default}"
@@ -62,12 +63,29 @@ jobs:
           echo "value=main@${short_sha}" >> "$GITHUB_OUTPUT"
         shell: bash -euo pipefail {0}
 
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update -qq
+          # Ubuntu 22.04 ships gcc-arm-none-eabi 15:10.3-2021.07-4 (gcc 10.3.1),
+          # matching the gcc-10 that ArduPilot builds with in its own CI.
+          # python3-venv is separate on Debian/Ubuntu: without it the system
+          # interpreter has no ensurepip and `python3 -m venv` fails.
+          sudo apt-get install -y -qq gcc-arm-none-eabi python3-venv
+          arm-none-eabi-gcc --version | head -1
+        shell: bash -euo pipefail {0}
+
       - name: Build
         run: |
-          export PATH="/opt/gcc-arm-none-eabi-${GCC_VERSION}/bin:/github/home/.local/bin:${PATH}"
-          arm-none-eabi-gcc --version
-          # --debug-symbols keeps DWARF in the ELF without changing optimisation,
-          # so the analysed binary matches what ships.
+          # Build in a dedicated venv on the system interpreter, so the LOCI
+          # action's setup-python environment is left untouched. empy must be
+          # pinned to 3.3.4: 4.x breaks ArduPilot's code generation.
+          /usr/bin/python3 -m venv .venv
+          .venv/bin/python -m pip install -q --upgrade pip setuptools wheel
+          .venv/bin/python -m pip install -q "empy==3.3.4" pexpect pyserial \
+            intelhex dronecan pymavlink lxml future packaging
+          export PATH="${PWD}/.venv/bin:${PATH}"
+          # --debug-symbols keeps DWARF in the ELF without switching to a debug
+          # variant, so the analysed binary matches what ships.
           ./waf configure --board "${LOCI_BOARD}" --debug-symbols
           ./waf "${LOCI_VEHICLE}"
         shell: bash -euo pipefail {0}
