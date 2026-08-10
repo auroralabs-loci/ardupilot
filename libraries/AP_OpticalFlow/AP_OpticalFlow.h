@@ -39,7 +39,8 @@ public:
     CLASS_NO_COPY(AP_OpticalFlow);
 
     // get singleton instance
-    static AP_OpticalFlow *get_singleton() {
+    static AP_OpticalFlow *get_singleton()
+    {
         return _singleton;
     }
 
@@ -78,10 +79,16 @@ public:
     void init(uint32_t log_bit);
 
     // enabled - returns true if optical flow is enabled
-    bool enabled() const { return _type != Type::NONE; }
+    bool enabled() const
+    {
+        return _type != Type::NONE;
+    }
 
     // healthy - return true if the sensor is healthy
-    bool healthy() const { return backend != nullptr && _flags.healthy; }
+    bool healthy() const
+    {
+        return backend != nullptr && _flags.healthy;
+    }
 
     // read latest values from sensor and fill in x,y and totals.
     void update(void);
@@ -95,28 +102,44 @@ public:
 #endif
 
     // quality - returns the surface quality as a measure from 0 ~ 255
-    uint8_t quality() const { return _state.surface_quality; }
+    uint8_t quality() const
+    {
+        return _state.surface_quality;
+    }
 
     // flowRate - returns the raw movement from the sensor in rad/s
-    const Vector2f& flowRate() const { return _state.flowRate; }
+    const Vector2f& flowRate() const
+    {
+        return _state.flowRate;
+    }
 
     // bodyRate - returns the IMU-adjusted movement in rad/s
-    const Vector2f& bodyRate() const { return _state.bodyRate; }
+    const Vector2f& bodyRate() const
+    {
+        return _state.bodyRate;
+    }
 
     // last_update() - returns system time of last sensor update
-    uint32_t last_update() const { return _last_update_ms; }
+    uint32_t last_update() const
+    {
+        return _last_update_ms;
+    }
 
     // get_height_override() - returns the user-specified height of sensor above ground
-    float get_height_override() const { return _height_override; }
+    float get_height_override() const
+    {
+        return _height_override;
+    }
 
+    //state filled in by backend
     struct OpticalFlow_state {
         uint8_t  surface_quality;   // image quality (below TBD you can't trust the dx,dy values returned)
         Vector2f flowRate;          // optical flow angular rate in rad/sec measured about the X and Y body axis. A RH rotation about a sensor axis produces a positive rate.
-        Vector2f bodyRate;          // body inertial angular rate in rad/sec measured about the X and Y body axis. A RH rotation about a sensor axis produces a positive rate.
+        Vector2f bodyRate;          // body inertial angular rate.
     };
-
     // return a 3D vector defining the position offset of the sensors focal point in metres relative to the body frame origin
-    const Vector3f &get_pos_offset(void) const {
+    const Vector3f &get_pos_offset(void) const
+    {
         return _pos_offset;
     }
 
@@ -164,8 +187,9 @@ private:
 #endif
 };
 
-namespace AP {
-    AP_OpticalFlow *opticalflow();
+namespace AP
+{
+AP_OpticalFlow *opticalflow();
 }
 
 #include "AP_OpticalFlow_Backend.h"
