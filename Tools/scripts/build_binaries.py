@@ -379,6 +379,7 @@ is bob we will attempt to checkout bob-AVR'''
         '''build vehicle binaries'''
         if frames is None:
             frames = [None]
+        tag_dir = os.path.join(self.binaries, vehicle_binaries_subdir, tag)
         self.progress("Building %s %s binaries (cwd=%s)" %
                       (vehicle, tag, os.getcwd()))
 
@@ -514,8 +515,7 @@ is bob we will attempt to checkout bob-AVR'''
                     try:
                         '''copy path into various places, adding metadata'''
                         bname = os.path.basename(ddir)
-                        tdir = os.path.join(os.path.dirname(os.path.dirname(
-                            os.path.dirname(ddir))), tag, bname)
+                        tdir = os.path.join(tag_dir, bname)
                         if tag == "latest":
                             # we keep a permanent archive of all
                             # "latest" builds, their path including a
@@ -545,14 +545,13 @@ is bob we will attempt to checkout bob-AVR'''
                         self.print_exception_caught(e)
                         self.progress("Failed to copy %s to %s: %s" % (path, tdir, str(e)))
                 # why is touching this important? -pb20170816
-                self.touch_filepath(os.path.join(self.binaries,
-                                                 vehicle_binaries_subdir, tag))
+                self.touch_filepath(tag_dir)
 
                 # record some history about this build
                 self.history.record_build(githash, tag, vehicle, board, frame, bare_path, t0, time_taken_to_build)
 
         # Generate parameter metadata for this vehicle
-        self.generate_parameter_metadata_for_vehicle(tag, vehicle, vehicle_binaries_subdir)
+        self.generate_parameter_metadata_for_vehicle(tag, vehicle, tag_dir)
 
         self.checkout(vehicle, "latest")
 
@@ -753,7 +752,7 @@ is bob we will attempt to checkout bob-AVR'''
             self.progress(f"Failed to generate pdef.xml for {git_tag}")
             return False
 
-    def generate_parameter_metadata_for_vehicle(self, tag: str, vehicle_type: str, vehicle_binaries_subdir: str):
+    def generate_parameter_metadata_for_vehicle(self, tag: str, vehicle_type: str, tag_dir: str):
         '''generate parameter metadata XML file for a specific vehicle and version'''
 
         self.progress(f"Generating parameter metadata for {vehicle_type} {tag}")
@@ -784,11 +783,8 @@ is bob we will attempt to checkout bob-AVR'''
             self.progress(f"Failed to get version for {vehicle_type}")
             return
 
-        # Create destination directory using the same structure as binaries
-        dst_dir = os.path.join(self.binaries, vehicle_binaries_subdir, tag)
-
         # Generate the metadata file
-        if not self.create_pdef_xml_file(vehicle_type, dst_dir, git_tag):
+        if not self.create_pdef_xml_file(vehicle_type, tag_dir, git_tag):
             self.progress(f"Failed to create pdef.xml for {vehicle_type} {version}")
             return
 
