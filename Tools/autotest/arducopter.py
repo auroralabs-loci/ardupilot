@@ -15428,16 +15428,6 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             "ATC_ANGLE_MAX": 45,
         })
 
-        # each speed is only held for the length of one mission leg,
-        # and confirming it takes several seconds of continuously
-        # in-band samples: at the rate VFR_HUD is streamed by default
-        # the mission can reach the next DO_CHANGE_SPEED before enough
-        # of them arrive, and the check then sees the following leg's
-        # speed:
-        #     Failed to attain groundspeed between 3.5 and 4.5,
-        #     reached 14.94
-        self.context_set_message_rate_hz(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, 10)
-
         self.change_mode('AUTO')
         self.wait_ready_to_arm()
         self.arm_vehicle()
