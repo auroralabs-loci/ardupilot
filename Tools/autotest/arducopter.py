@@ -5974,6 +5974,15 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             rtl_speed_ms+tolerance,
             minimum_duration=5,
         )
+        # change_mode confirms the change by waiting for a HEARTBEAT,
+        # so at the default rate it can take a couple of seconds of
+        # simulated time to return - while the vehicle starts braking
+        # as soon as the command arrives.  Decelerating from RTL_SPEED
+        # to zero takes only about 1.6s at WP_ACC, so the zero crossing
+        # below can be over before we are watching for it, leaving us
+        # to see only the acceleration back up to WP_SPD.  Confirm the
+        # mode change promptly instead.
+        self.context_set_message_rate_hz('HEARTBEAT', 200)
         self.change_mode('AUTO')
         # we are returning on the same path, so should see a zero velocity:
         self.wait_groundspeed(
