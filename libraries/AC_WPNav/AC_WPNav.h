@@ -204,7 +204,7 @@ public:
     // (NED down) at the end of the orbit and is_terrain_alt selects the altitude frame. The orbit is
     // flown at the waypoint speed, limited by the corner acceleration through the arc radius.
     // Returns false if a terrain-frame transition is required but terrain data is unavailable.
-    bool set_circle_destination_NED_m(const Vector2f& center_ne_m, float turns_signed, float dest_d_m, bool is_terrain_alt);
+    virtual bool set_circle_destination_NED_m(const Vector2f& center_ne_m, float turns_signed, float dest_d_m, bool is_terrain_alt);
 
     // Computes the horizontal stopping point in NE frame, returned in centimeters.
     // See get_wp_stopping_point_NE_m() for full details.

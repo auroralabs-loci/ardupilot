@@ -30,6 +30,11 @@ public:
     // - Resets OA state on success.
     bool set_wp_destination_NED_m(const Vector3p& destination_ned_m, bool is_terrain_alt = false, float arc_rad = 0.0) override;
 
+    // Sets a circular-orbit destination about center_ne_m using the S-curve engine.
+    // See AC_WPNav::set_circle_destination_NED_m() for full details.
+    // - Resets OA state on success.
+    bool set_circle_destination_NED_m(const Vector2f& center_ne_m, float turns_signed, float dest_d_m, bool is_terrain_alt) override;
+
     // Returns the horizontal distance to the final destination in centimeters.
     // See get_wp_distance_to_destination_m() for full details.
     float get_wp_distance_to_destination_cm() const override;
