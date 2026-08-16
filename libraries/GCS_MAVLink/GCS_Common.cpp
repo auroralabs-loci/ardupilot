@@ -1207,6 +1207,9 @@ ap_message GCS_MAVLINK::mavlink_id_to_ap_message_id(const uint32_t mavlink_id) c
 #if AP_MAVLINK_MSG_FLIGHT_INFORMATION_ENABLED
         { MAVLINK_MSG_ID_FLIGHT_INFORMATION, MSG_FLIGHT_INFORMATION},
 #endif
+#if AP_MAVLINK_UTM_GLOBAL_POSITION_SENDING_ENABLED
+        { MAVLINK_MSG_ID_UTM_GLOBAL_POSITION, MSG_UTM_GLOBAL_POSITION},
+#endif
     };
 
     for (uint8_t i=0; i<ARRAY_SIZE(map); i++) {
