@@ -5997,6 +5997,13 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         # to see only the acceleration back up to WP_SPD.  Confirm the
         # mode change promptly instead.
         self.context_set_message_rate_hz('HEARTBEAT', 200)
+        # the turn-around is a sharp V rather than a pause: the vehicle
+        # crosses the band below in well under the 0.24s of simulated
+        # time between VFR_HUD messages, so exactly one sample lands
+        # inside it and reads 0.474-0.484 against the 0.5 limit - the
+        # test passes on the phase of the stream.  Ask for the message
+        # often enough to see the reversal rather than its shoulder.
+        self.context_set_message_rate_hz('VFR_HUD', 50)
         self.change_mode('AUTO')
         # we are returning on the same path, so should see a zero velocity:
         self.wait_groundspeed(
