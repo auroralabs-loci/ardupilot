@@ -52,6 +52,23 @@ bool AC_WPNav_OA::set_wp_destination_NED_m(const Vector3p& destination_ned_m, bo
     return ret;
 }
 
+// Sets a circular-orbit destination about center_ne_m using the S-curve engine.
+// See AC_WPNav::set_circle_destination_NED_m() for full details.
+// - Resets OA state on success.
+bool AC_WPNav_OA::set_circle_destination_NED_m(const Vector2f& center_ne_m, float turns_signed, float dest_d_m, bool is_terrain_alt)
+{
+    // Call base implementation to set the orbit leg
+    const bool ret = AC_WPNav::set_circle_destination_NED_m(center_ne_m, turns_signed, dest_d_m, is_terrain_alt);
+
+    // If destination set successfully, reset OA state to inactive
+    if (ret) {
+        // reset object avoidance state
+        _oa_state = AP_OAPathPlanner::OA_NOT_REQUIRED;
+    }
+
+    return ret;
+}
+
 // Returns the horizontal distance to the final destination in centimeters.
 // See get_wp_distance_to_destination_m() for full details.
 float AC_WPNav_OA::get_wp_distance_to_destination_cm() const
