@@ -97,6 +97,7 @@ private:
     bool _got_device_info;          // true once gimbal has provided device info
     bool _initialised;              // true once the gimbal has provided a GIMBAL_DEVICE_INFORMATION
     uint32_t _last_devinfo_req_ms;  // system time that GIMBAL_DEVICE_INFORMATION was last requested (used to throttle requests)
+    uint32_t _last_target_send_ms;  // system time the retained gimbal target was last refreshed
     class GCS_MAVLINK *_link;       // link we have found gimbal on; nullptr if not seen yet
     uint8_t _sysid;                 // sysid of gimbal
     uint8_t _compid;                // component id of gimbal

@@ -173,6 +173,25 @@ const AP_Param::GroupInfo AP_Mount_Params::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("_OPTIONS", 16, AP_Mount_Params, options, 0),
 
+    // @Param: _ATT_RATE
+    // @DisplayName: MAVLink gimbal attitude rate
+    // @Description: Rate at which AUTOPILOT_STATE_FOR_GIMBAL_DEVICE messages are sent to a MAVLink gimbal. Zero disables these messages
+    // @Units: Hz
+    // @Range: 0 50
+    // @Increment: 1
+    // @RebootRequired: True
+    // @User: Advanced
+    AP_GROUPINFO("_ATT_RATE", 17, AP_Mount_Params, attitude_rate_hz, 10),
+
+    // @Param: _TARG_RATE
+    // @DisplayName: MAVLink gimbal target rate
+    // @Description: Rate at which GIMBAL_DEVICE_SET_ATTITUDE messages are sent to a MAVLink gimbal. Zero disables these messages
+    // @Units: Hz
+    // @Range: 0 50
+    // @Increment: 1
+    // @User: Advanced
+    AP_GROUPINFO("_TARG_RATE", 18, AP_Mount_Params, target_rate_hz, 10),
+
     AP_GROUPEND
 };
 

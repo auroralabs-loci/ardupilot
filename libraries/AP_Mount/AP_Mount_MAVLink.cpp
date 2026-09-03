@@ -4,13 +4,13 @@
 
 #include "AP_Mount_MAVLink.h"
 
+#include <AP_AHRS/AP_AHRS.h>
 #include <AP_HAL/AP_HAL.h>
 #include <GCS_MAVLink/GCS.h>
 
 extern const AP_HAL::HAL& hal;
 
 #define AP_MOUNT_MAVLINK_SEARCH_MS  60000    // search for gimbal for 1 minute after startup
-#define AP_MOUNT_MAVLINK_ATTITUDE_INTERVAL_US    20000  // send ATTITUDE and AUTOPILOT_STATE_FOR_GIMBAL_DEVICE at 50hz
 
 // update mount position
 void AP_Mount_MAVLink::update()
@@ -25,8 +25,20 @@ void AP_Mount_MAVLink::update()
 
     update_mnt_target();
 
-    // send target angles/rates/retract depending on the target type
-    send_target_to_gimbal();
+    // A gimbal device retains its most recent angle/rate target.  Repeating it
+    // at the AP_Mount update rate wastes bandwidth.  Refresh the target at the
+    // configured rate, or disable target transmission for non-positive rates.
+    const int8_t target_rate_hz = _params.target_rate_hz.get();
+    if (target_rate_hz <= 0) {
+        return;
+    }
+    const uint32_t target_interval_ms =
+        1000U / constrain_int16(target_rate_hz, 1, 50);
+    const uint32_t now_ms = AP_HAL::millis();
+    if (now_ms - _last_target_send_ms >= target_interval_ms) {
+        _last_target_send_ms = now_ms;
+        send_target_to_gimbal();
+    }
 }
 
 // return true if healthy
@@ -61,6 +73,26 @@ bool AP_Mount_MAVLink::healthy() const
 bool AP_Mount_MAVLink::get_attitude_quaternion(Quaternion& att_quat)
 {
     att_quat = _gimbal_device_attitude_status.q;
+
+    // AP_Mount's backend contract requires roll/pitch in earth frame and yaw
+    // in vehicle frame.  Prefer the explicit yaw-frame flags used by modern
+    // gimbals, falling back to YAW_LOCK only for legacy implementations.
+    const uint16_t flags = _gimbal_device_attitude_status.flags;
+    const bool yaw_frame_explicit =
+        (flags & (GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME |
+                  GIMBAL_DEVICE_FLAGS_YAW_IN_EARTH_FRAME)) != 0;
+    const bool yaw_is_earth_frame =
+        (flags & GIMBAL_DEVICE_FLAGS_YAW_IN_EARTH_FRAME) != 0 ||
+        (!yaw_frame_explicit &&
+         (flags & GIMBAL_DEVICE_FLAGS_YAW_LOCK) != 0);
+    if (yaw_is_earth_frame) {
+        float roll_rad;
+        float pitch_rad;
+        float yaw_ef_rad;
+        att_quat.to_euler(roll_rad, pitch_rad, yaw_ef_rad);
+        att_quat.from_euler(roll_rad, pitch_rad,
+                            wrap_PI(yaw_ef_rad - AP::ahrs().get_yaw_rad()));
+    }
     return true;
 }
 
@@ -198,8 +230,16 @@ bool AP_Mount_MAVLink::start_sending_attitude_to_gimbal()
     if (_link == nullptr) {
         return false;
     }
-    // send AUTOPILOT_STATE_FOR_GIMBAL_DEVICE
-    const MAV_RESULT res = _link->set_message_interval(MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE, AP_MOUNT_MAVLINK_ATTITUDE_INTERVAL_US);
+    // Set the default AUTOPILOT_STATE_FOR_GIMBAL_DEVICE rate.  The receiver
+    // can subsequently override this with MAV_CMD_SET_MESSAGE_INTERVAL.
+    const int8_t requested_rate_hz = _params.attitude_rate_hz.get();
+    int32_t attitude_interval_us = -1;
+    if (requested_rate_hz > 0) {
+        attitude_interval_us = 1000000 / requested_rate_hz;
+    }
+    const MAV_RESULT res = _link->set_message_interval(
+        MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE,
+        attitude_interval_us);
 
     // return true on success
     return (res == MAV_RESULT_ACCEPTED);
