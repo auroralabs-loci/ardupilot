@@ -255,7 +255,7 @@ void AP_Camera_MAVLinkCamV2::send_camera_capture_status(mavlink_channel_t chan) 
 
     mavlink_msg_camera_capture_status_send(
         chan,
-        _capture_status.time_boot_ms,
+        AP_HAL::millis(),           // time_boot_ms from this relaying component
         _capture_status.image_status,
         _capture_status.video_status,
         _capture_status.image_interval,
