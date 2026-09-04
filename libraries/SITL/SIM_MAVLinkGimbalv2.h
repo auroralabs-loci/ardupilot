@@ -42,7 +42,7 @@ protected:
     virtual const char *get_vendor_name()      const = 0;
     virtual const char *get_model_name()       const = 0;
     virtual uint32_t    get_firmware_version() const = 0;
-    virtual uint16_t    get_cap_flags()        const = 0;
+    virtual uint32_t    get_cap_flags()        const = 0;
     virtual float get_pitch_min_rad() const = 0;
     virtual float get_pitch_max_rad() const = 0;
     virtual float get_yaw_min_rad()   const = 0;
@@ -56,6 +56,7 @@ protected:
     void send_mavlink_message(const mavlink_message_t &msg);
     uint8_t vehicle_sysid()  const { return _vehicle_system_id; }
     uint8_t vehicle_compid() const { return _vehicle_component_id; }
+    uint8_t gimbal_compid()  const { return _compid; }
     mavlink_status_t &gimbal_mav_status() { return mav.status; }
 
     // override in a combined class to handle non-gimbal commands on the same link

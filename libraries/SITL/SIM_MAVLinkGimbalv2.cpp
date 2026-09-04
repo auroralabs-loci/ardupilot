@@ -93,12 +93,23 @@ void MAVLinkGimbalv2::handle_message(const mavlink_message_t &msg)
             break;
         }
         if (cmd.command == MAV_CMD_DO_SET_ROI_LOCATION) {
-            _roi.loc.lat = cmd.x;
-            _roi.loc.lng = cmd.y;
-            _roi.loc.set_alt_m(cmd.z, (Location::AltFrame)cmd.frame);
-            _roi.valid = true;
+            MAV_RESULT result = MAV_RESULT_DENIED;
+            const bool global_frame = cmd.frame == MAV_FRAME_GLOBAL ||
+                                      cmd.frame == MAV_FRAME_GLOBAL_INT;
+            if (global_frame &&
+                (get_cap_flags() & GIMBAL_DEVICE_CAP_FLAGS_CAN_POINT_LOCATION_GLOBAL) != 0) {
+                _roi.loc.lat = cmd.x;
+                _roi.loc.lng = cmd.y;
+                _roi.loc.set_alt_m(cmd.z, Location::AltFrame::ABSOLUTE);
+                _roi.valid = true;
+                result = MAV_RESULT_ACCEPTED;
+            }
+            send_command_ack(msg.sysid, msg.compid,
+                             MAV_CMD_DO_SET_ROI_LOCATION, result);
         } else if (cmd.command == MAV_CMD_DO_SET_ROI_NONE) {
             _roi.valid = false;
+            send_command_ack(msg.sysid, msg.compid,
+                             MAV_CMD_DO_SET_ROI_NONE, MAV_RESULT_ACCEPTED);
         }
         break;
     }
@@ -174,7 +185,9 @@ void MAVLinkGimbalv2::send_gimbal_device_information()
     info.pitch_max = get_pitch_max_rad();
     info.yaw_min   = get_yaw_min_rad();
     info.yaw_max   = get_yaw_max_rad();
-    info.cap_flags = get_cap_flags();
+    const uint32_t cap_flags = get_cap_flags();
+    info.cap_flags = (uint16_t)cap_flags;
+    info.cap_flags2 = cap_flags;
     strncpy_noterm(info.vendor_name, get_vendor_name(), sizeof(info.vendor_name));
     strncpy_noterm(info.model_name,  get_model_name(),  sizeof(info.model_name));
 
@@ -201,8 +214,8 @@ void MAVLinkGimbalv2::update_gimbal(const Aircraft &aircraft)
             * cosf(radians((veh.lat + _roi.loc.lat) * 0.00000005f)) * 0.01113195f;
         const float gps_y = (_roi.loc.lat - veh.lat) * 0.01113195f;
         int32_t target_alt_cm = 0, veh_alt_cm = 0;
-        if (_roi.loc.get_alt_cm(Location::AltFrame::ABOVE_HOME, target_alt_cm) &&
-            veh.get_alt_cm(Location::AltFrame::ABOVE_HOME, veh_alt_cm)) {
+        if (_roi.loc.get_alt_cm(Location::AltFrame::ABSOLUTE, target_alt_cm) &&
+            veh.get_alt_cm(Location::AltFrame::ABSOLUTE, veh_alt_cm)) {
             const float gps_z = (float)(target_alt_cm - veh_alt_cm);  // cm
             const float horiz_cm = 100.0f * norm(gps_x, gps_y);
             float pitch_ef = atan2f(gps_z, horiz_cm);
@@ -278,18 +291,22 @@ void MAVLinkGimbalv2::send_attitude_status()
         // earth-frame target: report actual gimbal DCM so convergence is visible
         flags = GIMBAL_DEVICE_FLAGS_ROLL_LOCK |
                 GIMBAL_DEVICE_FLAGS_PITCH_LOCK |
-                GIMBAL_DEVICE_FLAGS_YAW_LOCK;
+                GIMBAL_DEVICE_FLAGS_YAW_LOCK |
+                GIMBAL_DEVICE_FLAGS_YAW_IN_EARTH_FRAME;
         q.from_rotation_matrix(gimbal_dcm);
     } else if (_target.valid && !_target.yaw_is_ef && !_target.is_rate) {
         // body-frame angle target: report the commanded body-relative attitude
         // directly, matching how servo mounts report commanded angles
-        flags = 0;
+        flags = GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME;
         q = _target.attitude;
     } else {
         // neutral or rate control: report body-relative attitude from DCM
-        flags = 0;
+        flags = GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME;
         const Matrix3f body_to_gimbal = _vehicle_dcm.transposed() * gimbal_dcm;
         q.from_rotation_matrix(body_to_gimbal);
+    }
+    if ((get_cap_flags() & GIMBAL_DEVICE_CAP_FLAGS_SUPPORTS_YAW_IN_EARTH_FRAME) != 0) {
+        flags |= GIMBAL_DEVICE_FLAGS_ACCEPTS_YAW_IN_EARTH_FRAME;
     }
 
     mavlink_gimbal_device_attitude_status_t status {};
@@ -305,6 +322,8 @@ void MAVLinkGimbalv2::send_attitude_status()
     status.angular_velocity_y = 0.0f;
     status.angular_velocity_z = 0.0f;
     status.failure_flags = 0;
+    status.delta_yaw = NAN;
+    status.delta_yaw_velocity = NAN;
 
     mavlink_message_t msg;
     mavlink_msg_gimbal_device_attitude_status_encode_status(
