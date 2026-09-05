@@ -21,6 +21,7 @@ status *CAM*
 
 #include "SIM_Mount.h"
 #include "SIM_Gimbal.h"
+#include "SIM_MAVLinkGimbalv2_Estimator.h"
 #include <GCS_MAVLink/GCS_MAVLink.h>
 #include <AP_Math/AP_Math.h>
 #include <AP_Common/Location.h>
@@ -69,6 +70,7 @@ private:
     void send_heartbeat();
     void send_gimbal_device_information();
     void send_attitude_status();
+    void request_telemetry();
     void send_command_ack(uint8_t target_sysid, uint8_t target_compid,
                           MAV_CMD command, MAV_RESULT result);
 
@@ -96,6 +98,8 @@ private:
     } mav;
 
     Matrix3f _vehicle_dcm;
+    Matrix3f _gimbal_dcm;
+    MAVLinkGimbalv2_Estimator _estimator;
 
     // ROI location tracking: set by COMMAND_INT DO_SET_ROI_LOCATION
     struct {
