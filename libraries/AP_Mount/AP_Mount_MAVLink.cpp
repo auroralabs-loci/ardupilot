@@ -25,20 +25,33 @@ void AP_Mount_MAVLink::update()
 
     update_mnt_target();
 
-    // A gimbal device retains its most recent angle/rate target.  Repeating it
-    // at the AP_Mount update rate wastes bandwidth.  Refresh the target at the
-    // configured rate, or disable target transmission for non-positive rates.
-    const int8_t target_rate_hz = _params.target_rate_hz.get();
-    if (target_rate_hz <= 0) {
+    if (_params.target_rate_hz.get() <= 0) {
+        _last_target_msgid = 0;
         return;
     }
+    send_target_to_gimbal();
+}
+
+// Compare the final command so frame, mode and converted location changes
+// are sent immediately, while an unchanged target is refreshed periodically.
+void AP_Mount_MAVLink::send_target_message(uint32_t msgid, const char *pkt, uint8_t len)
+{
+    const int8_t target_rate_hz = _params.target_rate_hz.get();
     const uint32_t target_interval_ms =
         1000U / constrain_int16(target_rate_hz, 1, 50);
     const uint32_t now_ms = AP_HAL::millis();
-    if (now_ms - _last_target_send_ms >= target_interval_ms) {
-        _last_target_send_ms = now_ms;
-        send_target_to_gimbal();
+    if (_last_target_msgid == msgid &&
+        memcmp(&_last_target, pkt, len) == 0 &&
+        now_ms - _last_target_send_ms < target_interval_ms) {
+        return;
     }
+    if (!_link->check_payload_size(len)) {
+        return;
+    }
+    _link->send_message(msgid, pkt);
+    memcpy(&_last_target, pkt, len);
+    _last_target_msgid = msgid;
+    _last_target_send_ms = now_ms;
 }
 
 // return true if healthy
@@ -263,7 +276,8 @@ void AP_Mount_MAVLink::send_target_retracted()
         _compid
     };
 
-    _link->send_message(MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE, (const char*)&pkt);
+    send_target_message(MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE, (const char*)&pkt,
+                        MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE_LEN);
 }
 
 // send GIMBAL_DEVICE_SET_ATTITUDE to gimbal to control rate
@@ -287,7 +301,8 @@ void AP_Mount_MAVLink::send_target_rates(const MountRateTarget &rate_rads)
         _compid
     };
 
-    _link->send_message(MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE, (const char*)&pkt);
+    send_target_message(MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE, (const char*)&pkt,
+                        MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE_LEN);
 }
 
 // send GIMBAL_DEVICE_SET_ATTITUDE to gimbal to control attitude
@@ -320,7 +335,8 @@ void AP_Mount_MAVLink::send_target_angles(const MountAngleTarget &angle_rad)
         _compid
     };
 
-    _link->send_message(MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE, (const char*)&pkt);
+    send_target_message(MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE, (const char*)&pkt,
+                        MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE_LEN);
 }
 
 // Send MAV_CMD_DO_SET_ROI_LOCATION  to gimbal
@@ -351,7 +367,7 @@ void AP_Mount_MAVLink::send_target_location(const Location &roi_loc)
         pkt.command = MAV_CMD_DO_SET_ROI_NONE;
     }
 
-    _link->send_message(MAVLINK_MSG_ID_COMMAND_INT, (const char*)&pkt);
+    send_target_message(MAVLINK_MSG_ID_COMMAND_INT, (const char*)&pkt, MAVLINK_MSG_ID_COMMAND_INT_LEN);
 }
 
 #endif // HAL_MOUNT_MAVLINK_ENABLED

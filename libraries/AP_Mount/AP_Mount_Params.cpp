@@ -184,8 +184,8 @@ const AP_Param::GroupInfo AP_Mount_Params::var_info[] = {
     AP_GROUPINFO("_ATT_RATE", 17, AP_Mount_Params, attitude_rate_hz, 10),
 
     // @Param: _TARG_RATE
-    // @DisplayName: MAVLink gimbal target rate
-    // @Description: Rate at which GIMBAL_DEVICE_SET_ATTITUDE messages are sent to a MAVLink gimbal. Zero disables these messages
+    // @DisplayName: MAVLink gimbal target refresh rate
+    // @Description: Refresh rate for unchanged MAVLink gimbal targets. Changed targets are sent immediately. Zero disables target transmission
     // @Units: Hz
     // @Range: 0 50
     // @Increment: 1
