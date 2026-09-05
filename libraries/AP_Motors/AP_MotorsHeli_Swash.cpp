@@ -17,6 +17,8 @@
 #include <AP_HAL/AP_HAL.h>
 #include <SRV_Channel/SRV_Channel.h>
 #include <AP_Logger/AP_Logger.h>
+#include <AP_Math/matrix3.h>
+#include <GCS_MAVLink/GCS.h>
 
 #include "AP_MotorsHeli_Swash.h"
 
@@ -107,6 +109,14 @@ void AP_MotorsHeli_Swash::configure()
     enable.set(_swash_type == SWASHPLATE_TYPE_H3);
 
     calculate_roll_pitch_collective_factors();
+
+    // Calculate the swash to servo matrix and its inverse. The 0.45 factor was used in calculating the servo output.
+    // The 0.45 factor is removed to calculate the swashplate inputs from the servo outputs directly for logging.
+    _swash_to_servo_matrix = Matrix3f(_collectiveFactor[0], _rollFactor[0]/0.45, _pitchFactor[0]/0.45,
+                                      _collectiveFactor[1], _rollFactor[1]/0.45, _pitchFactor[1]/0.45,
+                                      _collectiveFactor[2], _rollFactor[2]/0.45, _pitchFactor[2]/0.45);
+    good_inverse = _swash_to_servo_matrix.inverse(_servo_to_swash_matrix);
+
 }
 
 // CCPM Mixers - calculate mixing scale factors by swashplate type
@@ -303,19 +313,27 @@ uint32_t AP_MotorsHeli_Swash::get_output_mask() const
 
 #if HAL_LOGGING_ENABLED
 // Write SWSH log for this instance of swashplate
-void AP_MotorsHeli_Swash::write_log(float cyclic_scaler, float col_ang_min, float col_ang_max, int16_t col_min, int16_t col_max) const
+void AP_MotorsHeli_Swash::write_log(float col_ang_min, float col_ang_max, int16_t col_min, int16_t col_max) const
 {
-    // Calculate the collective contribution to blade pitch angle
-    // Swashplate receives the scaled collective value based on the col_min and col_max params. We have to reverse the scaling here to do the angle calculation.
-    float collective_scalar = ((float)(col_max-col_min))*1e-3;
-    collective_scalar = MAX(collective_scalar, 1e-3);
-    float _collective_input = (_collective_input_scaled - (float)(col_min - 1000)*1e-3) / collective_scalar;
-    float col = (col_ang_max - col_ang_min) * _collective_input + col_ang_min;
 
-    // Calculate the cyclic contribution to blade pitch angle
-    float tcyc = norm(_roll_input, _pitch_input) * cyclic_scaler;
-    float pcyc = _pitch_input * cyclic_scaler;
-    float rcyc = _roll_input * cyclic_scaler;
+    // determine collective and cyclic blade pitch angle based on the swashplate output values.
+    float col_ang_per_pwm = (col_ang_max - col_ang_min)  / ((float)(col_max - col_min) * 1e-3);
+    Vector3f servo_vector;
+    for (uint8_t i = 0; i < 3; i++) {
+        // convert servo output from -1 to 1 to 0 to 1 and scale servo output to blade pitch angle.
+        servo_vector[i] = (0.5f * (_output[i] + 1.0f)) * col_ang_per_pwm;
+    }
+    // convert servo output to swashplate output using the inverse of the swash to servo matrix.
+    Vector3f swash_vector = _servo_to_swash_matrix * servo_vector;
+    float col = swash_vector.x;
+    if (_collective_direction == COLLECTIVE_DIRECTION_REVERSED) {
+        col = col_ang_per_pwm - col - (col_min - 1000) * 1e-3 * col_ang_per_pwm + col_ang_min;
+    } else {
+        col = col - (col_min - 1000) * 1e-3 * col_ang_per_pwm + col_ang_min;
+    }
+    float rcyc = 0.5f * swash_vector.y; // Since the servo output is converted to a blade pitch angle, the conversion is half of the calculated roll.
+    float pcyc = 0.5f * swash_vector.z; // Since the servo output is converted to a blade pitch angle, the conversion is half of the calculated pitch.
+    float tcyc = norm(rcyc, pcyc);
 
     // @LoggerMessage: SWSH
     // @Description: Helicopter swashplate logging
