@@ -95,6 +95,7 @@ private:
     mavlink_camera_information_t _cam_info {}; // latest camera information received from camera
     mavlink_camera_capture_status_t _capture_status; // latest recording/capture status
     bool _got_capture_status;    // true once camera has provided CAMERA_CAPTURE_STATUS
+    uint32_t _last_capture_status_ms; // receipt time of the cached status
     uint32_t _last_capture_status_req_ms; // last remote status request
     uint32_t _last_caminfo_req_ms;  // system time that CAMERA_INFORMATION was last requested (used to throttle requests)
     class GCS_MAVLINK *_link;   // link we have found the camera on. nullptr if not seen yet

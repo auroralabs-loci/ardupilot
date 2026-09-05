@@ -7,6 +7,7 @@ extern const AP_HAL::HAL& hal;
 
 #define AP_CAMERA_MAVLINKCAMV2_SEARCH_MS    60000   // search for camera for 60 seconds after startup
 #define AP_CAMERA_MAVLINKCAMV2_STATUS_INTERVAL_MS 1000
+#define AP_CAMERA_MAVLINKCAMV2_STATUS_TIMEOUT_MS 3000
 #define AP_CAMERA_MAVLINKCAMV2_EMPTY_STREAM_RETRY_MS 10000
 
 // update - should be called at 50hz
@@ -195,6 +196,7 @@ void AP_Camera_MAVLinkCamV2::handle_message(mavlink_channel_t chan, const mavlin
     case MAVLINK_MSG_ID_CAMERA_CAPTURE_STATUS:
         mavlink_msg_camera_capture_status_decode(&msg, &_capture_status);
         _got_capture_status = true;
+        _last_capture_status_ms = AP_HAL::millis();
         break;
 
 #if AP_MAVLINK_MSG_VIDEO_STREAM_INFORMATION_ENABLED
@@ -252,13 +254,23 @@ void AP_Camera_MAVLinkCamV2::send_camera_capture_status(mavlink_channel_t chan) 
         AP_Camera_Backend::send_camera_capture_status(chan);
         return;
     }
+    if (AP_HAL::millis() - _last_capture_status_ms > AP_CAMERA_MAVLINKCAMV2_STATUS_TIMEOUT_MS) {
+        return;
+    }
+
+    // ArduPilot implements interval capture by sending individual shots to
+    // the camera, so the camera cannot report our interval setting itself.
+    const bool interval_active = time_interval_settings.num_remaining != 0;
+    const uint8_t image_status = _capture_status.image_status | (interval_active ? 2 : 0);
+    const float image_interval = interval_active ?
+        time_interval_settings.time_interval_ms * 0.001f : _capture_status.image_interval;
 
     mavlink_msg_camera_capture_status_send(
         chan,
         AP_HAL::millis(),           // time_boot_ms from this relaying component
-        _capture_status.image_status,
+        image_status,
         _capture_status.video_status,
-        _capture_status.image_interval,
+        image_interval,
         _capture_status.recording_time_ms,
         _capture_status.available_capacity,
         _capture_status.image_count);
