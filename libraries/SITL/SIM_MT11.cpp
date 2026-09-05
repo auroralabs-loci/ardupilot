@@ -10,12 +10,14 @@
 #include "SIM_Aircraft.h"
 
 #include <AP_HAL/utility/Socket_native.h>
+#include <AP_HAL/utility/RingBuffer.h>
 #include <AP_HAL/AP_HAL.h>
 #include <AP_ROMFS/AP_ROMFS.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 extern const AP_HAL::HAL &hal;
 
@@ -44,14 +46,24 @@ public:
             if (sock == nullptr) {
                 break;
             }
+            if (!sock->set_blocking(false)) {
+                delete sock;
+                continue;
+            }
             bool accepted = false;
             for (uint8_t i = 0; i < ARRAY_SIZE(_clients); i++) {
                 if (_clients[i].control != nullptr) {
                     continue;
                 }
                 _clients[i] = Client{};
+                _clients[i].output = NEW_NOTHROW ByteBuffer(OUTPUT_BUFFER_SIZE);
+                if (_clients[i].output == nullptr ||
+                    _clients[i].output->get_size() != OUTPUT_BUFFER_SIZE) {
+                    delete _clients[i].output;
+                    _clients[i].output = nullptr;
+                    break;
+                }
                 _clients[i].control = sock;
-                _clients[i].control->set_blocking(false);
                 _clients[i].session_id = 1000U + 10U * _instance + i;
                 _clients[i].sequence = 1;
                 _clients[i].timestamp = 90000U * (i + 1U);
@@ -68,16 +80,22 @@ public:
             if (client.control == nullptr) {
                 continue;
             }
-            if (!read_requests(client, i, wall_time_us)) {
+            if (!flush_output(client) ||
+                (!client.closing && !read_requests(client, i, wall_time_us))) {
                 disconnect(client);
                 continue;
             }
-            if (client.playing && wall_time_us >= client.next_frame_us) {
+            // Keep at most one video frame queued for a slow TCP client.
+            if (!client.closing && client.playing && client.output->is_empty() &&
+                wall_time_us >= client.next_frame_us) {
                 if (!send_frame(client)) {
                     disconnect(client);
                     continue;
                 }
                 client.next_frame_us = wall_time_us + FRAME_INTERVAL_US;
+            }
+            if (!flush_output(client) || (client.closing && client.output->is_empty())) {
+                disconnect(client);
             }
         }
     }
@@ -86,6 +104,8 @@ private:
     static constexpr uint8_t MAX_CLIENTS = 4;
     static constexpr uint32_t FRAME_INTERVAL_US = 1000000U / 30U;
     static constexpr uint16_t RTP_MAX_PAYLOAD = 1388;
+    static constexpr uint32_t OUTPUT_BUFFER_SIZE = 64U * 1024U;
+    static constexpr uint16_t MAX_RESPONSE_SIZE = 2048;
 
     enum class Transport : uint8_t {
         NONE,
@@ -104,6 +124,7 @@ private:
     struct Client {
         SocketAPM_native *control;
         SocketAPM_native *rtp_socket;
+        ByteBuffer *output;
         char request[4096];
         uint16_t request_len;
         uint32_t session_id;
@@ -118,6 +139,7 @@ private:
         uint8_t interleaved_channel;
         Transport transport;
         bool playing;
+        bool closing;
     };
 
     static const uint8_t *find_start_code(const uint8_t *ptr,
@@ -144,7 +166,7 @@ private:
     {
         static const char alphabet[] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        const uint16_t required = 4U * ((src_len + 2U) / 3U) + 1U;
+        const uint32_t required = 4U * ((uint32_t(src_len) + 2U) / 3U) + 1U;
         if (required > dst_len) {
             return false;
         }
@@ -249,7 +271,26 @@ private:
     {
         delete client.control;
         delete client.rtp_socket;
+        delete client.output;
         client = Client{};
+    }
+
+    bool flush_output(Client &client)
+    {
+        uint32_t len;
+        const uint8_t *data = client.output->readptr(len);
+        if (len == 0) {
+            return true;
+        }
+        const ssize_t sent = client.control->send(data, len);
+        if (sent < 0) {
+            return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+        }
+        if (sent == 0) {
+            return false;
+        }
+        client.output->advance(sent);
+        return true;
     }
 
     static uint32_t get_cseq(const char *request)
@@ -262,7 +303,7 @@ private:
                        const char *status, const char *headers = "",
                        const char *body = "")
     {
-        char response[2048];
+        char response[MAX_RESPONSE_SIZE];
         const uint16_t body_len = strlen(body);
         const int len = hal.util->snprintf(
             response, sizeof(response),
@@ -272,7 +313,7 @@ private:
         if (len <= 0 || len >= (int)sizeof(response)) {
             return false;
         }
-        return client.control->send(response, len) == len;
+        return client.output->write((const uint8_t *)response, len) == unsigned(len);
     }
 
     int8_t stream_from_uri(const char *uri) const
@@ -450,8 +491,8 @@ private:
         }
 
         if (strcmp(method, "TEARDOWN") == 0) {
-            IGNORE_RETURN(send_response(client, cseq, "200 OK"));
-            return false;
+            client.closing = true;
+            return send_response(client, cseq, "200 OK");
         }
 
         return send_response(client, cseq, "405 Method Not Allowed");
@@ -460,6 +501,9 @@ private:
     bool read_requests(Client &client, uint8_t client_index,
                        uint64_t wall_time_us)
     {
+        if (client.output->space() < MAX_RESPONSE_SIZE) {
+            return true;
+        }
         if (client.control->pollin(0)) {
             const uint16_t available = sizeof(client.request) -
                                        client.request_len - 1U;
@@ -468,6 +512,9 @@ private:
             }
             const ssize_t received = client.control->recv(
                 client.request + client.request_len, available, 0);
+            if (received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+                return true;
+            }
             if (received <= 0) {
                 return false;
             }
@@ -475,7 +522,8 @@ private:
             client.request[client.request_len] = 0;
         }
 
-        while (client.request_len > 0) {
+        while (client.request_len > 0 && !client.closing &&
+               client.output->space() >= MAX_RESPONSE_SIZE) {
             if ((uint8_t)client.request[0] == '$') {
                 if (client.request_len < 4) {
                     return true;
@@ -483,7 +531,10 @@ private:
                 const uint16_t packet_len =
                     ((uint8_t)client.request[2] << 8) |
                     (uint8_t)client.request[3];
-                const uint16_t total_len = packet_len + 4U;
+                const uint32_t total_len = uint32_t(packet_len) + 4U;
+                if (total_len >= sizeof(client.request)) {
+                    return false;
+                }
                 if (client.request_len < total_len) {
                     return true;
                 }
@@ -564,7 +615,7 @@ private:
         interleaved[2] = packet_len >> 8;
         interleaved[3] = packet_len;
         memcpy(interleaved + 4, packet, packet_len);
-        return client.control->send(interleaved, packet_len + 4U) ==
+        return client.output->write(interleaved, packet_len + 4U) ==
                packet_len + 4U;
     }
 
@@ -658,10 +709,10 @@ private:
 
     Media _media[2] {};
     Client _clients[MAX_CLIENTS] {};
-    SocketAPM_native *_listener;
+    SocketAPM_native *_listener {};
     uint8_t _instance;
     uint16_t _port;
-    bool _running;
+    bool _running {};
 };
 
 void MT11::update(const class Aircraft &aircraft)
