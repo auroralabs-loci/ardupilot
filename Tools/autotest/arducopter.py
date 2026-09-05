@@ -8929,19 +8929,145 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             self.context_collection('VIDEO_STREAM_INFORMATION')
         ]
 
+    def MountMT11Telemetry(self):
+        '''verify MT11 targeting uses only telemetry requested on its private link'''
+        self.set_parameters({
+            "MNT1_TYPE": 6,
+            "CAM1_TYPE": 6,
+            "SERIAL5_PROTOCOL": 2,
+            "MAV3_OPTIONS": 2,
+            "MAV3_POSITION": 0,
+            "MNT1_ATT_RATE": 0,
+        })
+        # Bridge the private serial connection to the simulated gimbal so we
+        # can inspect requests and withhold/alter the actual telemetry input.
+        self.customise_SITL_commandline([
+            "--serial5=tcp:5775",
+            "--net-device=mt11:5776",
+        ])
+        saved_mavfile_global = mavutil.mavfile_global
+        vehicle = mavutil.mavlink_connection("tcp:127.0.0.1:5775")
+        gimbal = None
+        hook = None
+        try:
+            gimbal = mavutil.mavlink_connection("tcp:127.0.0.1:5776")
+            gimbal.target_system = self.sysid_thismav()
+            mavutil.mavfile_global = saved_mavfile_global
+            blocked = set()
+            requests = {}
+            altitude_offset_mm = 0
+            position_type = 'GLOBAL_POSITION_INT'
+            attitude_type = 'AUTOPILOT_STATE_FOR_GIMBAL_DEVICE'
+
+            def bridge(mav, message):
+                for source, destination in ((gimbal, vehicle), (vehicle, gimbal)):
+                    for _ in range(100):
+                        packet = source.recv_match()
+                        if packet is None:
+                            break
+                        if source is gimbal:
+                            if (packet.get_type() == 'COMMAND_LONG' and
+                                    packet.command == mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL):
+                                if packet.param2 != 100000:
+                                    raise NotAchievedException("Unexpected MT11 telemetry interval")
+                                message_id = int(packet.param1)
+                                requests[message_id] = requests.get(message_id, 0) + 1
+                        else:
+                            if packet.get_type() in (position_type, attitude_type):
+                                if packet.get_msgId() not in requests:
+                                    raise NotAchievedException("Unrequested MT11 telemetry: %s" % packet.get_type())
+                            if packet.get_type() in ('ATTITUDE', 'SYSTEM_TIME', 'VFR_HUD'):
+                                raise NotAchievedException("Normal stream reached MT11 private link")
+                            if packet.get_type() in blocked:
+                                continue
+                            if packet.get_type() == position_type and altitude_offset_mm:
+                                packet.alt += altitude_offset_mm
+                                destination.mav.srcSystem = packet.get_srcSystem()
+                                destination.mav.srcComponent = packet.get_srcComponent()
+                                destination.mav.send(packet)
+                                continue
+                        destination.write(packet.get_msgbuf())
+
+            hook = bridge
+            self.install_message_hook(hook)
+            self.wait_camera_initialised(1)
+            self.wait_ready_to_arm()
+
+            def wait_gimbal_health(healthy, timeout=10):
+                tstart = self.get_sim_time()
+                while self.get_sim_time_cached() - tstart < timeout:
+                    self.mav.recv_match(blocking=True, timeout=0.1)
+                    status = gimbal.messages.get('GIMBAL_DEVICE_ATTITUDE_STATUS')
+                    if status is not None and (status.failure_flags == 0) == healthy:
+                        return
+                raise NotAchievedException("MT11 did not become healthy=%s" % healthy)
+
+            self.progress("Checking MT11 requested both private-link telemetry streams")
+            wait_gimbal_health(True)
+            for message_id in (mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT,
+                               mavutil.mavlink.MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE):
+                if message_id not in requests:
+                    raise NotAchievedException("MT11 did not request message %u" % message_id)
+
+            here = self.get_location(frame=AltFrame.ABOVE_HOME)
+            target = self.offset_location_ne(here, 100, 100)
+            self.run_cmd_int(
+                mavutil.mavlink.MAV_CMD_DO_SET_ROI_LOCATION,
+                x=int(target.lat * 1e7),
+                y=int(target.lng * 1e7),
+                z=here.get_alt_m(AltFrame.ABOVE_HOME) + 50,
+                frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            )
+            expected_pitch = math.degrees(math.atan2(50, math.sqrt(2) * 100))
+            self.wait_mount_roll_pitch_yaw_deg(p=expected_pitch, y=135)
+
+            self.progress("Checking MT11 uses received MSL altitude for ROI")
+            altitude_offset_mm = 100000
+            self.wait_mount_roll_pitch_yaw_deg(p=-expected_pitch, y=135)
+            altitude_offset_mm = 0
+            self.wait_mount_roll_pitch_yaw_deg(p=expected_pitch, y=135)
+
+            for message_type in (position_type, attitude_type):
+                self.progress("Checking MT11 loss and recovery of %s" % message_type)
+                before = dict(requests)
+                blocked.add(message_type)
+                wait_gimbal_health(False)
+                self.delay_sim_time(2, reason="allow MT11 to re-request missing telemetry")
+                message_id = getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_' + message_type)
+                if requests.get(message_id, 0) <= before.get(message_id, 0):
+                    raise NotAchievedException("MT11 did not re-request %s" % message_type)
+                blocked.clear()
+                wait_gimbal_health(True)
+                self.wait_mount_roll_pitch_yaw_deg(p=expected_pitch, y=135)
+
+            self.progress("Checking MT11 ROI tracking after aircraft movement")
+            self.takeoff(20, mode="GUIDED")
+            self.fly_guided_move_local(50, 0, 20)
+            self.wait_mount_roll_pitch_yaw_deg(p=math.degrees(math.atan2(30, math.hypot(50, 100))))
+            self.land_and_disarm()
+        finally:
+            if hook is not None:
+                self.remove_message_hook(hook)
+            if gimbal is not None:
+                gimbal.close()
+            vehicle.close()
+            mavutil.mavfile_global = saved_mavfile_global
+
     def MountMT11(self):
         '''test the MAVLink camera and gimbal protocols using SIM_MT11'''
         self.set_parameters({
             "MNT1_TYPE": 6,         # MAVLink
             "CAM1_TYPE": 6,         # MAVLink Camera v2
             "SERIAL5_PROTOCOL": 2,  # MAVLink2
+            "MAV3_OPTIONS": 2,     # private link: no forwarded GCS streams
+            "MAV3_POSITION": 0,
+            "MNT1_ATT_RATE": 0,    # the gimbal must request its own telemetry
         })
         self.customise_SITL_commandline(["--serial5=sim:mt11:"])
         self.wait_camera_initialised(1)
 
-        for name in "MNT1_ATT_RATE", "MNT1_TARG_RATE":
-            if self.get_parameter(name) != 10:
-                raise NotAchievedException("Unexpected %s default" % name)
+        if self.get_parameter("MNT1_TARG_RATE") != 10:
+            raise NotAchievedException("Unexpected MNT1_TARG_RATE default")
 
         self.progress("Checking MT11 GCS attitude-rate override")
         attitude_message = "AUTOPILOT_STATE_FOR_GIMBAL_DEVICE"
@@ -21102,6 +21228,7 @@ return update, 1000
             self.MountMAVLinkTargetRefresh,
             self.MAVLinkCameraCaptureStatus,
             self.MountMT11,
+            self.MountMT11Telemetry,
             self.MountAVTCM62Dual,
             self.MountAVTCM62DualMission,
             self.MountRCFailAngle,
