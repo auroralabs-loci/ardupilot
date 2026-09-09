@@ -24,6 +24,10 @@
 
 #include "AP_Filesystem_config.h"
 
+#if AP_FILESYSTEM_ALIAS_ENABLED
+#include <AP_HAL/Semaphores.h>
+#endif
+
 #ifndef MAX_NAME_LEN
 #define MAX_NAME_LEN 255
 #endif
@@ -183,6 +187,13 @@ private:
     struct Backend {
         const char *prefix;
         AP_Filesystem_Backend &fs;
+        /*
+          when set, the prefix is another name for the directory this
+          returns, in fs.  a path under the prefix is rewritten to sit under
+          that directory before fs is handed it.  a function rather than a
+          string because a board may only settle on the directory at runtime
+         */
+        const char *(*root)(void);
     };
     static const struct Backend backends[];
 
@@ -190,6 +201,83 @@ private:
       find backend by path
      */
     const Backend &backend_by_path(const char *&path) const;
+
+    /*
+      a path resolved to the backend which serves it.  where the prefix
+      names an alias the path is rewritten, and the rewritten copy lives
+      only as long as the resolver does - so keep one on the stack for as
+      long as the backend call which uses it, and no longer
+     */
+    class ResolvedPath {
+    public:
+        // where an alias's rewritten path is kept.  SHARED is the buffer
+        // AP_Filesystem keeps, and holds alias_sem for as long as this
+        // resolver lives.  OWN allocates one just for this resolver, for
+        // the second of two paths a single call needs at once
+        enum class Buffer : uint8_t {
+            SHARED,
+            OWN,
+        };
+
+        ResolvedPath(AP_Filesystem &filesystem, const char *path, Buffer buffer=Buffer::SHARED);
+        ~ResolvedPath();
+        CLASS_NO_COPY(ResolvedPath);
+
+        /*
+          false when the path could not be expressed at all, with errno
+          saying why: the alias root and the path together are longer than
+          we can build, or there was no memory to build them in.  the caller
+          must not go on to use it: there is no path which is guaranteed to
+          name nothing, so the only safe answer is to fail
+         */
+        bool valid(void) const { return _path != nullptr; }
+
+        const Backend &backend(void) const { return *_backend; }
+        const char *path(void) const { return _path; }
+
+    private:
+        const Backend *_backend;
+        const char *_path;
+#if AP_FILESYSTEM_ALIAS_ENABLED
+        AP_Filesystem &_filesystem;
+        // the buffer allocated for Buffer::OWN, freed with the resolver
+        char *_own_buffer;
+        // true while this resolver holds alias_sem and the shared buffer
+        bool _holds_shared_buffer;
+#endif
+    };
+
+#if AP_FILESYSTEM_ALIAS_ENABLED
+    /*
+      alias paths are rewritten into this buffer, allocated the first time
+      an alias is used and kept from then on, so a board which never uses
+      one never pays for it.  a path which does not fit is refused rather
+      than being quietly truncated into the name of some other file
+     */
+    char *alias_path = nullptr;
+
+    /*
+      held by a ResolvedPath using alias_path for as long as it lives,
+      which is for the whole of the backend call the path is handed to:
+      the backend reads the path while it works, not just when it starts.
+
+      WARNING: this is held across filesystem IO.  if that IO never
+      returns - a dead SD card wedging the thread inside the backend, say -
+      this is never given back, and every later call on an alias path
+      blocks forever in take_blocking(), taking whichever thread made it
+      (the FTP thread, for @MAV_LOG) down with it.  paths which are not
+      aliases never take this, though a backend wedged that way is likely
+      to be holding its own lock too
+     */
+    HAL_Semaphore alias_sem;
+
+    /*
+      alias_sem is recursive, so it cannot stop the thread which already
+      holds it from resolving a second alias path and overwriting the one
+      still in use.  nothing does that today; this makes it fail instead
+     */
+    bool alias_path_in_use = false;
+#endif
 
     /*
       find backend by open fd
