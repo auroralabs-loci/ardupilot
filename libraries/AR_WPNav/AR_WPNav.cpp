@@ -99,12 +99,14 @@ AR_WPNav::AR_WPNav(AR_AttitudeControl& atc, AR_PosControl &pos_control) :
 void AR_WPNav::init(float speed_max)
 {
     // determine max speed, acceleration and jerk
+    _check_speed_param_change = !is_positive(speed_max);
     if (is_positive(speed_max)) {
         _base_speed_max = speed_max;
     } else {
         _base_speed_max = _speed_max;
     }
     _base_speed_max = MAX(AR_WPNAV_SPEED_MIN, _base_speed_max);
+    _last_speed_param_ms = _speed_max;
     float atc_accel_max = MIN(_atc.get_accel_max(), _atc.get_decel_max());
     if (!is_positive(atc_accel_max)) {
         // accel_max of zero means no limit so use maximum acceleration
@@ -610,6 +612,12 @@ bool AR_WPNav::set_origin_and_destination_to_stopping_point()
 // controller limits if required
 void AR_WPNav::update_limits()
 {
+    // refresh _base_speed_max if WP_SPEED param changed since init
+    if (_check_speed_param_change && !is_equal(_speed_max.get(), _last_speed_param_ms)) {
+        _base_speed_max = MAX(AR_WPNAV_SPEED_MIN, _speed_max.get());
+        _last_speed_param_ms = _speed_max;
+    }
+
     // update limits
     float atc_accel_max = MIN(_atc.get_accel_max(), _atc.get_decel_max());
     if (!is_positive(atc_accel_max)) {
