@@ -7503,6 +7503,204 @@ return update()
         if abs(Horizontaldistance - expected_distance) > 1:
             raise NotAchievedException(f"Unexpected GPS position (want {expected_distance}, got {Horizontaldistance})")
 
+    def WP_SPEED(self):
+        '''ensure changing WP_SPEED during a mission works'''
+        self.upload_simple_relhome_mission([
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 300, 0, 0),
+        ])
+        start_speed_ms = self.get_parameter('WP_SPEED')
+        self.wait_ready_to_arm()
+        self.arm_vehicle()
+        self.change_mode('AUTO')
+
+        self.wait_groundspeed(start_speed_ms-1, start_speed_ms+1, minimum_duration=10)
+
+        for speed_ms in 1, 2, 3, 4, 5:
+            self.set_parameter('WP_SPEED', speed_ms)
+            self.wait_groundspeed(speed_ms-1, speed_ms+1, minimum_duration=10)
+        self.do_RTL()
+        self.disarm_vehicle()
+
+    def AutoModeAccelJerk(self):
+        '''test WP_ACCEL, ATC_ACCEL_MAX, ATC_DECEL_MAX, WP_JERK and ATC_TURN_MAX_G in AUTO mode'''
+        # A staircase of 300 m 90-degree legs, one per timed measurement.
+        # WP_ACCEL and WP_JERK are baked into _scurve_next_leg at each waypoint crossing
+        # and therefore take effect n+2 legs after the parameter change.
+        # WP1 must NOT be at home (0,0) or the zero-length home->WP1 leg means WP1 is
+        # passed before WP_ACCEL is set, corrupting the n+2 timing.
+        #   home->WP1   WP_SPEED already handled by WP_SPEED test
+        #   WP1->WP2   skip (WP_ACCEL=0.5 propagating from home->WP1)
+        #   WP2->WP3   WP_ACCEL measure
+        #   WP3->WP4   skip (WP_ACCEL=3.0 propagating from WP2->WP3)
+        #   WP4->WP5   ATC_ACCEL_MAX uncapped (throttle controller, instant)
+        #   WP5->WP6   ATC_ACCEL_MAX capped
+        #   WP6->WP7   ATC_DECEL_MAX uncapped (throttle controller, instant)
+        #   WP7->WP8   ATC_DECEL_MAX capped
+        #   WP8->WP9   skip (WP_JERK=50 propagating from WP7->WP8)
+        #   WP9->WP10  WP_JERK uncapped measure
+        #   WP10->WP11 skip (WP_JERK=0.5 propagating from WP9->WP10)
+        #   WP11->WP12 WP_JERK limited measure
+        self.upload_simple_relhome_mission([
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  300,    0, 0),  # WP1
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  300,  300, 0),  # WP2
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  600,  300, 0),  # WP3
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  600,  600, 0),  # WP4
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  900,  600, 0),  # WP5
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  900,  900, 0),  # WP6
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 1200,  900, 0),  # WP7
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 1200, 1200, 0),  # WP8
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 1500, 1200, 0),  # WP9
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 1500, 1500, 0),  # WP10
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 1800, 1500, 0),  # WP11
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 1800, 1800, 0),  # WP12
+        ])
+        self.wait_ready_to_arm()
+        self.arm_vehicle()
+        self.change_mode('AUTO')
+
+        # Timing band above the default corner speed (~2.9 m/s for ATC_TURN_MAX_G=0.6)
+        # so corner dips cannot corrupt the timed window.
+        high_speed    = 6.0   # m/s
+        accel_start   = 4.0   # m/s - timing start
+        accel_stop    = 5.0   # m/s - timing end
+        wp_accel      = 0.5   # m/s^2  expected 2.0 s from accel_start to accel_stop
+        wp_accel_high = 3.0   # m/s^2  used by cap and jerk subtests
+
+        self.start_subtest("WP_ACCEL: measure re-acceleration rate on leg WP2->WP3")
+        self.set_parameters({
+            "WP_SPEED": high_speed,
+            "WP_ACCEL": wp_accel,
+        })
+        self.wait_current_waypoint(3, timeout=120)  # WP_ACCEL=0.5 baked in at WP1 crossing
+        expected_time = (accel_stop - accel_start) / wp_accel  # (5.0-4.0)/0.5 = 2.0 s
+        self.wait_groundspeed(accel_start, 100, timeout=30)
+        tstart = self.get_sim_time()
+        self.wait_groundspeed(accel_stop, 100, timeout=expected_time * 3)
+        actual_time = self.get_sim_time() - tstart
+        if actual_time > expected_time * 2.0:
+            raise NotAchievedException(
+                "WP_ACCEL=%.1f too slow: expected ~%.1fs, got %.1fs" %
+                (wp_accel, expected_time, actual_time))
+        if actual_time < expected_time * 0.3:
+            raise NotAchievedException(
+                "WP_ACCEL=%.1f too fast: expected ~%.1fs, got %.1fs" %
+                (wp_accel, expected_time, actual_time))
+        self.progress("WP_ACCEL=%.1f ramp time %.1fs (expected ~%.1fs)" %
+                      (wp_accel, actual_time, expected_time))
+
+        self.start_subtest("WP_ACCEL cap: verify acceleration is capped to ATC_ACCEL_MAX")
+        atc_accel_cap = 0.5  # m/s^2
+        # WP_ACCEL=3.0 baked at WP3 crossing (set during WP2->WP3); n+2 lands on WP4->WP5.
+        # ATC_ACCEL_MAX is applied instantly by the throttle controller on top of the SCurve.
+        self.set_parameters({
+            "WP_ACCEL": wp_accel_high,
+            "ATC_ACCEL_MAX": 20.0,
+        })
+        self.wait_current_waypoint(5, timeout=120)
+        self.wait_groundspeed(accel_start, 100, timeout=30)
+        tstart = self.get_sim_time()
+        self.wait_groundspeed(accel_stop, 100, timeout=30)
+        time_uncapped = self.get_sim_time() - tstart
+        self.progress("Uncapped (WP_ACCEL=%.1f, ATC_ACCEL_MAX=20.0) ramp time: %.1fs" %
+                      (wp_accel_high, time_uncapped))
+        self.set_parameters({"ATC_ACCEL_MAX": atc_accel_cap})
+        self.wait_current_waypoint(6, timeout=120)
+        self.wait_groundspeed(accel_start, 100, timeout=60)
+        tstart = self.get_sim_time()
+        self.wait_groundspeed(accel_stop, 100, timeout=60)
+        time_capped = self.get_sim_time() - tstart
+        self.progress("Capped (WP_ACCEL=%.1f, ATC_ACCEL_MAX=%.1f) ramp time: %.1fs" %
+                      (wp_accel_high, atc_accel_cap, time_capped))
+        if time_capped < time_uncapped * 1.5:
+            raise NotAchievedException(
+                "ATC_ACCEL_MAX=%.1f did not cap WP_ACCEL=%.1f "
+                "(uncapped=%.1fs, capped=%.1fs)" %
+                (atc_accel_cap, wp_accel_high, time_uncapped, time_capped))
+
+        self.start_subtest("WP_ACCEL decel cap: verify deceleration is capped to ATC_DECEL_MAX")
+        atc_decel_cap = 0.5  # m/s^2
+        # ATC_DECEL_MAX is applied instantly by the throttle controller.
+        # Trigger deceleration via WP_SPEED reduction and time the drop across a 1 m/s band.
+        decel_meas_start = high_speed - 1.0  # 5.0 m/s
+        decel_meas_stop  = accel_start        # 4.0 m/s
+        low_speed = 2.0  # m/s
+        self.set_parameters({
+            "WP_ACCEL": wp_accel_high,
+            "ATC_ACCEL_MAX": 20.0,
+            "ATC_DECEL_MAX": 0.0,
+            "WP_SPEED": high_speed,
+        })
+        self.wait_current_waypoint(7, timeout=120)
+        self.wait_groundspeed(decel_meas_start + 0.3, 100, timeout=30)
+        self.set_parameters({"WP_SPEED": low_speed})
+        self.wait_groundspeed(0, decel_meas_start, timeout=30)
+        tstart = self.get_sim_time()
+        self.wait_groundspeed(0, decel_meas_stop, timeout=30)
+        time_uncapped_decel = self.get_sim_time() - tstart
+        self.progress("Uncapped decel (ATC_DECEL_MAX=0.0): %.1fs" % time_uncapped_decel)
+        self.set_parameters({
+            "WP_SPEED": high_speed,
+            "ATC_DECEL_MAX": atc_decel_cap,
+        })
+        self.wait_current_waypoint(8, timeout=120)
+        self.wait_groundspeed(decel_meas_start + 0.3, 100, timeout=30)
+        self.set_parameters({"WP_SPEED": low_speed})
+        self.wait_groundspeed(0, decel_meas_start, timeout=30)
+        tstart = self.get_sim_time()
+        self.wait_groundspeed(0, decel_meas_stop, timeout=60)
+        time_capped_decel = self.get_sim_time() - tstart
+        self.progress("Capped decel (ATC_DECEL_MAX=%.1f): %.1fs" %
+                      (atc_decel_cap, time_capped_decel))
+        if time_capped_decel < time_uncapped_decel * 1.5:
+            raise NotAchievedException(
+                "ATC_DECEL_MAX=%.1f did not cap deceleration rate "
+                "(uncapped=%.1fs, capped=%.1fs)" %
+                (atc_decel_cap, time_uncapped_decel, time_capped_decel))
+
+        self.start_subtest("WP_JERK: verify jerk limit slows the acceleration ramp")
+        # WP_JERK is n+2 same as WP_ACCEL.
+        # WP_JERK=50 set during WP7->WP8 -> baked at WP8 crossing -> measure on WP9->WP10.
+        self.set_parameters({
+            "WP_ACCEL": wp_accel_high,
+            "WP_JERK": 50.0,
+            "ATC_ACCEL_MAX": 20.0,
+            "ATC_DECEL_MAX": 0.0,
+            "WP_SPEED": high_speed,
+        })
+        self.wait_current_waypoint(10, timeout=120)  # jerk=50 in effect from WP8 crossing
+        self.wait_groundspeed(accel_start, 100, timeout=30)
+        tstart = self.get_sim_time()
+        self.wait_groundspeed(accel_stop, 100, timeout=30)
+        time_no_jerk = self.get_sim_time() - tstart
+        self.progress("Ramp time with no jerk limit: %.1fs" % time_no_jerk)
+        # WP_JERK=0.5 set during WP9->WP10 -> baked at WP10 crossing -> measure on WP11->WP12.
+        wp_jerk = 0.5  # m/s³
+        self.set_parameters({"WP_JERK": wp_jerk})
+        self.wait_current_waypoint(12, timeout=120)  # jerk=0.5 in effect from WP10 crossing
+        self.wait_groundspeed(accel_start, 100, timeout=30)
+        tstart = self.get_sim_time()
+        self.wait_groundspeed(accel_stop, 100, timeout=60)
+        time_with_jerk = self.get_sim_time() - tstart
+        self.progress("Ramp time with WP_JERK=%.1f: %.1fs (baseline %.1fs)" %
+                      (wp_jerk, time_with_jerk, time_no_jerk))
+        if time_with_jerk < time_no_jerk * 1.5:
+            raise NotAchievedException(
+                "WP_JERK=%.1f did not slow acceleration ramp "
+                "(baseline=%.1fs, with_jerk=%.1fs)" %
+                (wp_jerk, time_no_jerk, time_with_jerk))
+
+        self.start_subtest("ATC_TURN_MAX_G: verify turn speed limited by lateral G constraint")
+        self.set_parameters({
+            "WP_SPEED": 5.0,
+            "ATC_TURN_MAX_G": 0.2,
+        })
+        self.wait_groundspeed(3, 100, timeout=60)
+        # At ATC_TURN_MAX_G=0.2, TURN_RADIUS=0.9m: corner speed ~1.7 m/s.
+        self.wait_groundspeed(0, 2.5, minimum_duration=2, timeout=120)
+
+        self.disarm_vehicle()
+        self.progress("Mission OK")
+
     def tests(self):
         '''return list of all tests'''
         ret = super(AutoTestRover, self).tests()
@@ -7628,6 +7826,8 @@ return update()
             self.GPSAntennaPositionOffset,
             self.UTMGlobalPosition,
             self.UTMGlobalPositionWaypoint,
+            self.AutoModeAccelJerk,
+            self.WP_SPEED,
         ])
         return ret
 
