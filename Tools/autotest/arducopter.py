@@ -9118,6 +9118,7 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
     def MAVLinkUnicast(self):
         '''unicast links forward addressed traffic but isolate broadcasts'''
         self.set_parameters({
+            "ADSB_TYPE": 1,
             "SERIAL1_PROTOCOL": 2,
             "SERIAL2_PROTOCOL": 2,
             "SERIAL5_PROTOCOL": 2,
@@ -9265,6 +9266,32 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
                     sequence, 0, 0, 0, 0, 0, 0), expected)
                 check_forwarding(source, ping(0, 0), expected)
                 check_forwarding(source, ping(0, 100), expected)
+            self.progress("Checking independent header targets on normal and isolated links")
+            for source, target, expected in (
+                    ("gcs", (0, 0), ["normal"]),
+                    ("device", (0, 0), []),
+                    ("private", (250, 250), []),
+                    ("gcs", (42, 100), ["device"]),
+                    ("gcs", (42, 101), []),
+                    ("gcs", (44, 102), ["private"]),
+                    ("device", (253, 191), ["normal"])):
+                heartbeat = mavutil.mavlink.MAVLink_heartbeat_message(
+                    mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER, mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+                    0, sequence, 0, 3)
+                heartbeat.set_target(*target)
+                check_forwarding(source, heartbeat, expected)
+
+            self.progress("Checking header targets preserve radio and enabled-ADSB forwarding exclusions")
+            for source in ("gcs", "device"):
+                for target in ((0, 0), (253, 191), (65536 + 253, 191)):
+                    for message in (
+                            mavutil.mavlink.MAVLink_radio_status_message(177, 176, 100, 40, 50, 1, 2),
+                            mavutil.mavlink.MAVLink_radio_message(177, 176, 100, 40, 50, 1, 2),
+                            mavutil.mavlink.MAVLink_adsb_vehicle_message(
+                                0x123456, 0, 0, 0, 0, 0, 0, 0, b"TEST", 0, 0, 0, 0)):
+                        message.set_target(*target)
+                        check_forwarding(source, message, [])
+
             # A system-addressed packet with a broadcast or absent component
             # must not enter a unicast link, even with a known system route.
             for sysid in (42, 43):
@@ -10424,6 +10451,26 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
                 gimbal.close()
             vehicle.close()
             mavutil.mavfile_global = saved_mavfile_global
+
+    def MT11MAVFTP32bit(self):
+        """Camera discovery, telemetry and FTP with wide vehicle and GCS IDs."""
+        old_source = self.mav.source_system
+        old_sysid = self.sysid_thismav()
+        self.send_set_parameter_direct("MAV_SYSID", 100000)
+        self.mav.target_system = 100000
+        self.sysid_thismav = lambda: 100000
+        try:
+            self.wait_heartbeat(timeout=60)
+            self.mav.source_system = 70000
+            self.mav.mav.srcSystem = 70000
+            self.MT11MAVFTP()
+        finally:
+            self.mav.source_system = old_source
+            self.mav.mav.srcSystem = old_source
+            self.send_set_parameter_direct("MAV_SYSID", old_sysid)
+            del self.sysid_thismav
+            self.mav.target_system = old_sysid
+            self.wait_heartbeat(timeout=60)
 
     def MT11MAVFTP(self):
         '''list and download the simulated camera definition through a unicast link'''
@@ -23107,6 +23154,7 @@ return update, 1000
             self.MAVLinkCameraMixed,
             self.MAVLinkCameraStreams,
             self.MT11MAVFTP,
+            self.MT11MAVFTP32bit,
             self.MountMT11,
             self.MountMT11Telemetry,
             self.MountAVTCM62Dual,
