@@ -2696,7 +2696,7 @@ class TestSuite(abc.ABC):
             if time.time() - tstart > timeout:
                 raise NotAchievedException("Failed to set streamrate")
             self.mav.mav.request_data_stream_send(
-                1,
+                self.sysid_thismav(),
                 1,
                 stream,
                 streamrate,
@@ -3863,7 +3863,8 @@ class TestSuite(abc.ABC):
             tstart = time.time()
         else:
             tstart = self.get_sim_time()
-        self.mav.mav.timesync_send(0, self.timesync_number * 1000 + self.mav.source_system)
+        timesync_cookie = (self.timesync_number << 32) | self.mav.source_system
+        self.mav.mav.timesync_send(0, timesync_cookie)
         while True:
             if timeout_in_wallclock:
                 now = time.time()
@@ -3876,15 +3877,11 @@ class TestSuite(abc.ABC):
                 self.progress("Received: %s" % str(m))
             if m is None:
                 continue
-            if m.ts1 % 1000 != self.mav.source_system:
-                self.progress("this isn't a response to our timesync (%s)" % (m.ts1 % 1000))
-                continue
             if m.tc1 == 0:
-                # this should also not happen:
                 self.progress("this is a timesync request, which we don't answer")
                 continue
-            if int(m.ts1 / 1000) != self.timesync_number:
-                self.progress("this isn't the one we just sent")
+            if m.ts1 != timesync_cookie:
+                self.progress("this isn't the timesync request we just sent")
                 continue
             if m.get_srcSystem() != self.mav.target_system:
                 self.progress("response from system other than our target (want=%u got=%u" %
