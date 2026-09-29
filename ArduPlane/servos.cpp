@@ -1076,6 +1076,11 @@ void Plane::servos_output(void)
 }
 
 void Plane::update_throttle_hover() {
+    if (standby_active) {
+        // don't learn the hover throttle while riding along: this
+        // controller is not driving the motors
+        return;
+    }
     // update hover throttle at 100Hz
 #if HAL_QUADPLANE_ENABLED
     quadplane.update_throttle_hover();
@@ -1089,6 +1094,11 @@ void Plane::update_throttle_hover() {
  */
 void Plane::servos_auto_trim(void)
 {
+    if (standby_active) {
+        // the rate controller I terms are being continually flushed
+        // while in standby, so they carry no trim information
+        return;
+    }
     // only in auto modes and FBWA
     if (!control_mode->does_auto_throttle() && control_mode != &mode_fbwa) {
         return;
