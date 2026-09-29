@@ -42,7 +42,7 @@ public:
 
 #if HAL_LOGGING_ENABLED
     // Write SWSH log for this instance of swashplate
-    void write_log(float cyclic_scaler, float col_ang_min, float col_ang_max, int16_t col_min, int16_t col_max) const;
+    void write_log(float col_ang_min, float col_ang_max, int16_t col_min, int16_t col_max) const;
 #endif
 
     // var_info
@@ -88,6 +88,11 @@ private:
     float _roll_input;
     float _pitch_input;
     float _collective_input_scaled;
+    Matrix3f _servo_to_swash_matrix;  // Matrix to convert servo frame to swash frame
+    Matrix3f _swash_to_servo_matrix;  // Matrix to convert swash frame to servo frame
+    Vector3f _swash_vector;            // Swash vector in swash frame
+    Vector3f _servo_vector;            // Servo vector in servo frame
+    bool good_inverse;
 
     // parameters
     AP_Int8  _swashplate_type;                   // Swash Type Setting
