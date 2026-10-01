@@ -1,0 +1,101 @@
+name: LOCI Analysis
+on:
+  push:
+    branches:
+      - loci/main-*
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  loci:
+    if: vars.UPSTREAM_REPO != ''
+    # Deliberately NOT run in ardupilot/ardupilot-dev-chibios. The LOCI action's
+    # common step uses actions/setup-python, and the tool-cache interpreter it
+    # selects is unusable inside a container: GitHub mounts the host cache at
+    # /__t, but the cached CPython's console scripts carry a shebang baked to
+    # the host path /opt/hostedtoolcache/..., which does not exist in the
+    # container. execve then fails with ENOENT against pip. Installing the
+    # toolchain straight onto the runner avoids the whole problem.
+    runs-on: ubuntu-22.04
+
+    env:
+      LOCI_PROJECT: 'ardupilot'
+      LOCI_API_KEY: '${{ secrets.LOCI_API_KEY }}'
+      LOCI_BACKEND_URL: '${{ vars.LOCI_BACKEND_URL }}'
+      GH_TOKEN: ${{ secrets.MIRROR_REPOS_WRITE_PAT }}
+      # Board must be an armv7e-m target (Cortex-M4/M7) to match the LOCI target.
+      LOCI_BOARD: ${{ vars.LOCI_BOARD || 'Durandal' }}
+      LOCI_VEHICLE: ${{ vars.LOCI_VEHICLE || 'copter' }}
+      LOCI_BINARY: ${{ vars.LOCI_BINARY || 'arducopter' }}
+
+    environment: ${{ vars.LOCI_ENV || 'PROD__AL_DEMO' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'recursive'
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
+
+      - name: Compute target
+        id: target
+        if: github.event_name == 'push'
+        run: |
+          branch="${{ github.ref_name }}"
+          sha="${branch#loci/main-}"
+          echo "value=main@${sha}" >> "$GITHUB_OUTPUT"
+        shell: bash -euo pipefail {0}
+
+      - name: Compute base
+        id: base
+        if: github.event_name == 'pull_request'
+        run: |
+          git remote add upstream "https://github.com/${{ vars.UPSTREAM_REPO }}.git" 2>/dev/null || true
+          # Resolve the upstream default branch with plain git: no token needed
+          # for a public repo, and no dependency on the gh CLI being present.
+          upstream_default=$(git ls-remote --symref upstream HEAD \
+            | awk '/^ref:/ { sub("refs/heads/", "", $2); print $2; exit }')
+          echo "Upstream default branch: ${upstream_default}"
+          git fetch --no-tags upstream "${upstream_default}"
+          merge_base=$(git merge-base HEAD "refs/remotes/upstream/${upstream_default}")
+          short_sha="${merge_base:0:7}"
+          echo "value=main@${short_sha}" >> "$GITHUB_OUTPUT"
+        shell: bash -euo pipefail {0}
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update -qq
+          # Ubuntu 22.04 ships gcc-arm-none-eabi 15:10.3-2021.07-4 (gcc 10.3.1),
+          # matching the gcc-10 that ArduPilot builds with in its own CI.
+          # python3-venv is separate on Debian/Ubuntu: without it the system
+          # interpreter has no ensurepip and `python3 -m venv` fails.
+          sudo apt-get install -y -qq gcc-arm-none-eabi python3-venv
+          arm-none-eabi-gcc --version | head -1
+        shell: bash -euo pipefail {0}
+
+      - name: Build
+        run: |
+          # Build in a dedicated venv on the system interpreter, so the LOCI
+          # action's setup-python environment is left untouched. empy must be
+          # pinned to 3.3.4: 4.x breaks ArduPilot's code generation.
+          /usr/bin/python3 -m venv .venv
+          .venv/bin/python -m pip install -q --upgrade pip setuptools wheel
+          .venv/bin/python -m pip install -q "empy==3.3.4" pexpect pyserial \
+            intelhex dronecan pymavlink lxml future packaging
+          export PATH="${PWD}/.venv/bin:${PATH}"
+          # --debug-symbols keeps DWARF in the ELF without switching to a debug
+          # variant, so the analysed binary matches what ships.
+          ./waf configure --board "${LOCI_BOARD}" --debug-symbols
+          ./waf "${LOCI_VEHICLE}"
+        shell: bash -euo pipefail {0}
+
+      - name: Upload
+        uses: auroralabs-loci/loci-action@v1
+        with:
+          mode: upload
+          binaries: |
+                build/${{ env.LOCI_BOARD }}/bin/${{ env.LOCI_BINARY }}
+          project: '${{ env.LOCI_PROJECT }}'
+          target: ${{ steps.target.outputs.value || ''}}
+          base: ${{ steps.base.outputs.value || '' }}
