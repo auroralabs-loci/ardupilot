@@ -50,6 +50,7 @@
 #define REG_USER_GPIO_CFG1      0x2F
 #define REG_SPI_FULLDUPLEX_KEY  0x31
 #define REG_SPI_HALFDUPLEX_KEY  0x32
+#define REG_USER_SYNC           0x33
 
 #define REG_USER_DATA_CFG               0x34
 #define USER_DATA_CFG_X_ACCEL_EN        (1U<<0)
