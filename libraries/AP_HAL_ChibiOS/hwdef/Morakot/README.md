@@ -38,7 +38,7 @@ Engineered, tested, and manufactured in Taiwan, the Morakot Flight Controller me
 - Battery voltage indicator LED
 - MicroSD Slot
 - 9x motor outputs
-- 8x UART
+- 8x serial ports (USB + 7 UARTs)
 - 1x I2C
 - 1x CAN
 - 1x Ethernet
@@ -51,7 +51,7 @@ The UARTs are marked Rn and Tn in the above pinouts. The Rn pin is the receive p
 | Port | UART   | Protocol          | TX DMA | RX DMA |
 |------|--------|-------------------|:------:|:------:|
 | 0    | USB    | MAVLink2          |   ✘    |   ✘    |
-| 1    | USART1 | MSP_DisplayPort   |   ✔    |   ✔    |
+| 1    | USART1 | MSP DisplayPort   |   ✔    |   ✔    |
 | 2    | USART2 | MAVLink2          |   ✔    |   ✔    |
 | 3    | USART3 | None              |   ✔    |   ✔    |
 | 4    | UART5  | GPS               |   ✔    |   ✔    |
@@ -59,11 +59,15 @@ The UARTs are marked Rn and Tn in the above pinouts. The Rn pin is the receive p
 | 6    | UART7  | MAVLink2          |   ✔    |   ✔    |
 | 7    | UART8  | RCIN              |   ✔    |   ✔    |
 
+The protocol column lists defaults for firmware built with this board definition. See [OSD Support](#osd-support) for configuration and upgrade instructions.
+
 RTS/CTS flow control is available on UART7.
 
 ### VTX Support
 
-The JST-GH 7p connector supports a DJI Air Unit / HD VTX connection. Protocol defaults to DisplayPort. Pin 1 of the connector is 12v so be careful not to connect this to a peripheral that can not tolerate this voltage.
+The JST-GH 7p connector supports compatible DJI Air Unit / HD VTX devices. SERIAL1 defaults to MSP DisplayPort (`SERIAL1_PROTOCOL=42`). The secondary OSD backend is disabled by default (`OSD_TYPE2=0`); follow [OSD Support](#osd-support) to enable DisplayPort OSD and verify the settings for the connected device.
+
+Pin 1 is VIDEO and pin 2 supplies 12V. Check the connector pin numbering before wiring. Do not connect the 12V supply to a device that cannot tolerate it.
 
 ## Additional Information
 
@@ -75,7 +79,7 @@ The JST-GH 7p connector supports a DJI Air Unit / HD VTX connection. Protocol de
 ## More Information
 
 - [Morakot Flight Controller](https://taiphoon.com.tw/morakot-flight-controllor)
-- [Morakot documentation](https://taiphoon-com.gitbook.io/taiphoon.com-docs/flight-stack/morakot-flight-controller)
+- [Morakot documentation](https://taiphoon-com.gitbook.io/taiphoon.com-docs)
 
 ## Connections
 
@@ -85,7 +89,7 @@ The JST-GH 7p connector supports a DJI Air Unit / HD VTX connection. Protocol de
 |-----|-----------------|--------------|
 | 1   | VBAT IN         | 12V-33.6V    |
 | 2   | UART6_RX        | 3.3V         |
-| 3   | GND             | 3.3V         |
+| 3   | GND             | GND          |
 | 4   | CURRENT         | 3.3V         |
 | 5   | MOTOR/SERVO 1   | 3.3V         |
 | 6   | MOTOR/SERVO 2   | 3.3V         |
@@ -98,7 +102,7 @@ The JST-GH 7p connector supports a DJI Air Unit / HD VTX connection. Protocol de
 |-----|-----------------|--------------|
 | 1   | VBAT IN         | 12V-33.6V    |
 | 2   | MOTOR/SERVO 9   | 3.3V         |
-| 3   | GND             | 3.3V         |
+| 3   | GND             | GND          |
 | 4   | CURRENT         | 3.3V         |
 | 5   | MOTOR/SERVO 5   | 3.3V         |
 | 6   | MOTOR/SERVO 6   | 3.3V         |
@@ -138,7 +142,8 @@ The JST-GH 7p connector supports a DJI Air Unit / HD VTX connection. Protocol de
 
 ### VTX - 7 Pin JST-GH
 
-Note: connector pinout not in same order as standard HD VTX cabling
+The connector pinout differs from standard HD VTX cabling. Check every connection before applying power.
+
 | Pin | Signal Name           | Voltage |
 |-----|-----------------------|---------|
 | 1   | VIDEO                 |         |
@@ -146,8 +151,8 @@ Note: connector pinout not in same order as standard HD VTX cabling
 | 3   | GND                   | GND     |
 | 4   | USART1_RX             | 3.3V    |
 | 5   | USART1_TX             | 3.3V    |
-| 6   | GND                   | 3.3V    |
-| 7   | USART3_RX             | GND     |
+| 6   | GND                   | GND     |
+| 7   | USART3_RX             | 3.3V    |
 
 ### SPI (external OSD or IMU) - 6 Pin JST-SH
 
@@ -191,29 +196,56 @@ In order to use the SBUS pin on the HD VTX connector, you must change SERIAL7_PR
 
 ## PWM Output
 
-The Morakot supports up to 9 PWM outputs. All are DSHot and Bi-Directional DShot capable
+The Morakot supports up to 9 PWM outputs with DShot and bidirectional DShot support.
 
-The PWM is in 3 groups:
+The PWM outputs are in 3 timer groups:
 
-- PWM 1-4  in group1
-- PWM 4-8  in group2
-- PWM 9  in group3
+- PWM 1-4 in group1 (TIM1)
+- PWM 5-8 in group2 (TIM2)
+- PWM 9 in group3 (TIM3)
 
- Channels within the same group need to use the same output rate. If any channel in a group uses DShot then all channels in that group need to use DShot.
+Channels within the same group need to use the same output rate. If any channel in a group uses DShot then all channels in that group need to use DShot.
 
 ## Compass
 
-The Morakot has a built-in compass. Due to potential interference, the autopilot is usually used with an external I2C compass as part of a GPS/Compass combination and the internal compass disabled.
+The Morakot has a built-in IIS2MDC compass. Supported external I2C compasses connected through the GPS connector are detected automatically.
+
+Due to potential interference, an external I2C compass in a GPS/Compass combination is commonly used with the internal compass disabled.
 
 ## OSD Support
 
-DisplayPort OSD is enabled by default on the HD VTX connector. Simultaneous DisplayPort operation on HD VTX connector is enabled by default also.
+The onboard analog OSD is enabled by default (`OSD_TYPE=1`). SERIAL1 defaults to MSP DisplayPort (`SERIAL1_PROTOCOL=42`), while the second OSD backend is disabled by default (`OSD_TYPE2=0`). To also use MSP DisplayPort on a compatible HD VTX connected to USART1, set:
+
+- `SERIAL1_PROTOCOL=42`
+- `SERIAL1_BAUD=115` (115200 baud)
+- `OSD_TYPE2=5`
+
+Reboot after changing the OSD configuration. See the [DisplayPort OSD documentation](https://ardupilot.org/copter/docs/common-displayport.html) for device-specific requirements.
+
+### Upgrading from older firmware
+
+SERIAL1 continues to default to DisplayPort (`SERIAL1_PROTOCOL=42`). The secondary OSD now defaults to disabled (`OSD_TYPE2=0`); older Morakot firmware, including Copter 4.7.2, enabled it by default.
+
+Previously saved parameter overrides are retained. After upgrading, HD VTX users must check and set `SERIAL1_PROTOCOL=42`, `SERIAL1_BAUD=115` and `OSD_TYPE2=5`, then reboot. A previously saved `SERIAL1_PROTOCOL=-1` must be changed to `42` to use DisplayPort.
+
+To stop using DisplayPort while keeping the onboard analog OSD, set `SERIAL1_PROTOCOL=-1` and `OSD_TYPE2=0`, then reboot. After upgrading, also check for a previously saved `OSD_TYPE2=5` and change it to `0` if DisplayPort is not used.
+
+## Battery Monitoring
+
+### Upgrading analog battery monitor calibration
+
+Older Morakot firmware, including Copter 4.7.2, used `SCALE(10)` for the voltage and current ADC inputs. This board definition uses `SCALE(1)`, which changes readings obtained with an existing analog battery monitor calibration.
+
+Back up the parameters before upgrading. After upgrading, verify voltage and current against known measurements and recalibrate the analog battery monitor as needed. Check battery failsafe settings before flight. This ADC scaling change does not apply to digital battery monitors.
 
 ## Firmware
 
-Firmware for this board can be found here in sub-folders labeled “Morakot”
+Download firmware from the [ArduPilot firmware server](https://firmware.ardupilot.org/) in the `Morakot` directory for your vehicle and release. Check that the selected build includes the fixes described here; older releases may still use the previous defaults.
 
 ## Loading Firmware
 
-Initial firmware load can be done with DFU by plugging in USB with the bootloader button pressed. Then you should load the “Morakotxx_bl.bin” firmware, using your favorite DFU loading tool.
-Once the initial firmware is loaded you can update the firmware using any ArduPilot ground station software. Updates should be done with the “*.apj” firmware files.
+### Initial installation
+
+To enter DFU mode, hold the boot button while connecting USB. Follow [Loading Firmware to Boards without an ArduPilot Compatible Bootloader](https://ardupilot.org/copter/docs/common-loading-firmware-onto-chibios-only-boards.html) and load the matching `*_with_bl.hex` file for Morakot, such as `arducopter_with_bl.hex` for Copter. This file contains both the main firmware and bootloader.
+
+Once ArduPilot is installed, use the matching `*.apj` file for normal updates through a ground station.
