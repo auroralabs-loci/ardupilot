@@ -35,8 +35,7 @@ Integrated with dual-redundant high-precision differential airspeed sensors, ant
 
   - Magnetometer:
 
-       Builtin RM3100 magnetometer
-       External RM3100 magnetometer
+       Builtin RM3100 magnetometer(SPI)
 
   - Airspeed
 
@@ -57,17 +56,18 @@ Integrated with dual-redundant high-precision differential airspeed sensors, ant
 ## UART Mapping
 
 The Cable Hub labels serial connectors by function. TX and RX are relative to the flight controller.
-| Name    | Function | MCU PINS |   DMA   | TYPE    |
-| :-----: | :------: | :------: | :------:| :------:|
-| SERIAL0 | OTG1     | USB      |
-| SERIAL1 | Telem1   | UART7    |DMA Enabled | TTL      |
-| SERIAL2 | Telem2   | UART5    |DMA Enabled | TTL      |
-| SERIAL3 | GPS1     | USART1   |DMA Enabled | TTL      |
-| SERIAL4 | GPS2     | UART8    |DMA Enabled | TTL      |
-| SERIAL5 | Telem3   | USART2   |DMA Enabled | RS232    |
-| SERIAL6 | UART4    | UART4    |DMA Enabled | RS422    |
-| SERIAL7 |FMU DEBUG | USART3   |DMA Disabled | TTL      |
-| SERIAL8 | OTG-SLCAN| USB      |
+
+| Port    | UART   | Protocol | Connector      | DMA | Type  |
+| ------- | ------ | -------- | -------------- | --- | ----- |
+| SERIAL0 | USB    | MAVLink2 | Type-C         |     |       |
+| SERIAL1 | UART7  | MAVLink2 | TELEM1-TTL, also internal 900MHz data link | Yes | TTL |
+| SERIAL2 | UART5  | MAVLink2 | TELEM2-TTL     | Yes | TTL   |
+| SERIAL3 | USART1 | GPS      | GPS1-TTL       | Yes | TTL   |
+| SERIAL4 | UART8  | GPS      | GPS2-TTL       | Yes | TTL   |
+| SERIAL5 | USART2 | MAVLink2 | TELEM3-RS232   | Yes | RS232 |
+| SERIAL6 | UART4  | None     | UART4-RS422    | Yes | RS422 |
+| SERIAL7 | USART3 | None     | FMU debug      | No  | TTL   |
+| SERIAL8 | USB    | SLCAN    | Type-C         |     |       |
 
 ## RC Input
 
@@ -76,18 +76,25 @@ For CRSF/ELRS, FPort telemetry, or SRXL2, use a full TTL UART such as TELEM1, TE
 
 Any UART can be used for RC system connections in ArduPilot also, and is compatible with all protocols except PPM. See [RC systems](https://ardupilot.org/copter/docs/common-rc-systems.html) for details.
 
+## Safety Switch
+
+The M9 does not expose an external safety switch connection. The safety switch
+requirement is disabled by default (`BRD_SAFETY_DEFLT=0`).
+If an existing configuration has `BRD_SAFETY_DEFLT=1`, set it to 0.
+
 ## PWM Output
 
 The M9 flight controller supports up to 16 PWM outputs.
-First 8 outputs (labelled 1 to 8) are controlled by a dedicated STM32F103 IO controller.
-The remaining 8 outputs (labelled 9 to 16) are the "auxiliary" outputs. These are directly attached to the STM32H753 FMU controller.
-All 16 outputs support normal PWM output formats. All 16 outputs support DShot, except 15 and 16.
+M1-M8 are controlled by a dedicated STM32F103 IO controller.
+A1-A8 are the "auxiliary" outputs, directly attached to the STM32H753 FMU controller.
+All 16 outputs support normal PWM output formats. All outputs support DShot, except A7 and A8.
+M1-M8 also support bi-directional DShot.
 
 The 8 IO PWM outputs are in 3 groups:
 
-- Outputs 1 and 2 in group1
-- Outputs 3 and 4 in group2
-- Outputs 5, 6, 7 and 8 in group3
+- M1 and M2 in group1
+- M3 and M4 in group2
+- M5, M6, M7 and M8 in group3
 
 The 8 FMU PWM outputs are in 3 groups:
 
@@ -119,7 +126,17 @@ The M9 flight controller supports switching between 5V and 3.3V PWM levels. Swit
 
 ## Compass
 
-The M9 has two RM3100 compasses. An external compass can also be connected to the I2C connector.
+The M9 has a built-in RM3100 compass. Due to potential interference, the autopilot is usually used with an external DroneCAN compass as part of a GPS/Compass combination, connected to the CAN connector.
+
+## Airspeed
+
+To configure the two AUAV-L30D airspeed sensors, set the following parameters and reboot:
+
+| Parameter | Value | Function |
+| --------- | ----- | -------- |
+| ARSPD_TYPE | 19 | AUAV 30in airspeed sensor |
+| ARSPD_BUS | 2 | I2C bus for the first airspeed sensor |
+| ARSPD2_TYPE | 8 | DroneCAN airspeed sensor |
 
 ## Ethernet
 
