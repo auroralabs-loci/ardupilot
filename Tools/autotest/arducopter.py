@@ -882,7 +882,7 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.arm_vehicle()
         self.disarm_vehicle()
 
-        # this will move but won't arc (it should...):
+        # the arc follows a takeoff so is not preloaded; WPArcsNotPreloaded checks it is flown as an arc
         self.start_subtest("Should move if no start waypoint")
         self.context_push()
         self.start_flying_simple_relhome_mission([
@@ -1062,6 +1062,122 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.wait_distance_to_home(10, 20)
         self.wait_disarmed(timeout=600)
         self.context_pop()
+
+    def WPArcsNotPreloaded(self):
+        '''arcs not preloaded by the previous leg must still be flown as arcs'''
+        self.set_parameters({
+            "AUTO_OPTIONS": 3,
+        })
+
+        # (mission seq, chord start NE, chord end NE) for each 180 degree arc; a
+        # semicircle bulges half its chord length away from the chord
+        arcs = [
+            (2, (0, 0), (0, 40)),       # after a takeoff
+            (4, (0, 60), (40, 60)),     # after a waypoint with a hold time
+            (6, (60, 60), (60, 20)),    # after a spline
+        ]
+        max_offset = {seq: 0.0 for (seq, _, _) in arcs}
+        current_seq = [None]
+
+        def offset_from_chord(pos, start, end):
+            chord = (end[0] - start[0], end[1] - start[1])
+            rel = (pos[0] - start[0], pos[1] - start[1])
+            return abs(chord[0] * rel[1] - chord[1] * rel[0]) / math.hypot(chord[0], chord[1])
+
+        def record_offset(mav, m):
+            m_type = m.get_type()
+            if m_type == 'MISSION_CURRENT':
+                current_seq[0] = m.seq
+                return
+            if m_type != 'LOCAL_POSITION_NED':
+                return
+            for (seq, start, end) in arcs:
+                if seq == current_seq[0]:
+                    max_offset[seq] = max(max_offset[seq], offset_from_chord((m.x, m.y), start, end))
+
+        self.context_push()
+        self.install_message_hook_context(record_offset)
+        self.start_flying_simple_relhome_mission([
+            (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 20),
+            (mavutil.mavlink.MAV_CMD_NAV_ARC_WAYPOINT, 0, 40, 20, {"p1": 180}),
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 60, 20, {"p1": 1}),
+            (mavutil.mavlink.MAV_CMD_NAV_ARC_WAYPOINT, 40, 60, 20, {"p1": 180}),
+            (mavutil.mavlink.MAV_CMD_NAV_SPLINE_WAYPOINT, 60, 60, 20),
+            (mavutil.mavlink.MAV_CMD_NAV_ARC_WAYPOINT, 60, 20, 20, {"p1": 180}),
+            (mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH, 0, 0, 0),
+        ])
+        self.wait_disarmed(timeout=300)
+        self.context_pop()
+
+        straight = []
+        for (seq, start, end) in arcs:
+            sagitta = 0.5 * math.hypot(end[0] - start[0], end[1] - start[1])
+            self.progress(f"arc at seq {seq}: max offset from chord {max_offset[seq]:.1f}m, sagitta {sagitta:.1f}m")
+            if max_offset[seq] < 0.7 * sagitta:
+                straight.append(seq)
+        if len(straight) > 0:
+            raise NotAchievedException(f"arcs at seq {straight} were not flown as arcs")
+
+    def DoJumpToDoCommand(self):
+        '''a jump whose target is a DO command must not preload the waypoint after the jump'''
+        self.set_parameters({
+            "AUTO_OPTIONS": 3,
+        })
+
+        # while flying the loop the vehicle stays within the L-A box; the waypoint
+        # after the jump is 200m east, so heading for it breaks the bound quickly
+        loop_seqs = (3, 4)
+        max_east = 60
+        current_seq = [None]
+        loop_east = [0.0]
+
+        def record_loop_east(mav, m):
+            m_type = m.get_type()
+            if m_type == 'MISSION_CURRENT':
+                current_seq[0] = m.seq
+                return
+            if m_type != 'LOCAL_POSITION_NED':
+                return
+            if current_seq[0] in loop_seqs:
+                loop_east[0] = max(loop_east[0], m.y)
+
+        loop_end = (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 40, 200, 20)
+        missions = {
+            "DO_JUMP": [
+                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 20),
+                self.create_MISSION_ITEM_INT(mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED, p1=1, p2=8),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 40, 0, 20),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 40, 40, 20),
+                self.create_MISSION_ITEM_INT(mavutil.mavlink.MAV_CMD_DO_JUMP, p1=2, p2=2),
+                loop_end,
+                (mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH, 0, 0, 0),
+            ],
+            "DO_JUMP_TAG": [
+                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 20),
+                self.create_MISSION_ITEM_INT(mavutil.mavlink.MAV_CMD_JUMP_TAG, p1=7),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 40, 0, 20),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 40, 40, 20),
+                self.create_MISSION_ITEM_INT(mavutil.mavlink.MAV_CMD_DO_JUMP_TAG, p1=7, p2=2),
+                loop_end,
+                (mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH, 0, 0, 0),
+            ],
+        }
+        left_loop = []
+        for (name, items) in missions.items():
+            self.start_subtest(f"{name} to a DO command")
+            self.change_mode('STABILIZE')  # needed to ensure Copter mission state machine works
+            current_seq[0] = None
+            loop_east[0] = 0.0
+            self.context_push()
+            self.install_message_hook_context(record_loop_east)
+            self.start_flying_simple_relhome_mission(items)
+            self.wait_disarmed(timeout=300)
+            self.context_pop()
+            self.progress(f"{name}: furthest east while in the loop {loop_east[0]:.1f}m (limit {max_east}m)")
+            if loop_east[0] > max_east:
+                left_loop.append(name)
+        if len(left_loop) > 0:
+            raise NotAchievedException(f"{left_loop} left the loop toward the waypoint after the jump")
 
     # test circle speed - should be constant degrees/second:
     def CircleSpeed(self):
@@ -19497,6 +19613,8 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         ret.extend([
             self.SetModesViaModeSwitch,
             self.WPArcs2,
+            self.WPArcsNotPreloaded,
+            self.DoJumpToDoCommand,
             self.BatteryFailsafeBrakeLandNoGPS,
             self.AC_Avoidance_Proximity,
             self.AC_Avoidance_Fence,
