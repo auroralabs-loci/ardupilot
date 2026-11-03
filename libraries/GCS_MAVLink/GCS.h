@@ -1301,6 +1301,7 @@ public:
 
     // update uart pass-thru
     void update_passthru();
+    void restore_passthru_line_settings();
 
     void get_sensor_status_flags(uint32_t &present, uint32_t &enabled, uint32_t &health);
     virtual bool vehicle_initialised() const { return true; }
@@ -1410,6 +1411,12 @@ private:
         uint32_t baud2;
         uint8_t parity1;
         uint8_t parity2;
+        uint16_t options1;
+        uint16_t options2;
+        uint16_t start_options1;
+        uint16_t start_options2;
+        // the ports have been taken and set up, see passthru_timer()
+        bool ports_set_up;
         uint8_t timeout_s;
         HAL_Semaphore sem;
     } _passthru;
