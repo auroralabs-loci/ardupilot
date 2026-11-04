@@ -192,6 +192,16 @@ public:
     // return number of registered sensors
     uint8_t num_instances(void) const { return _num_sensors; }
 
+#if AP_BARO_PROM_BACKUP_ENABLED
+    // store an MS5611/MS5607 PROM that passed its CRC. bus_id is the
+    // sensor's bus ID with devtype 0
+    void save_prom(const uint16_t prom[8], uint32_t bus_id);
+
+    // replace prom with a stored copy that passes its CRC and differs
+    // from prom by at most AP_BARO_PROM_MAX_BIT_DIFF bits
+    bool find_stored_prom(uint16_t prom[8], uint32_t bus_id) const;
+#endif
+
     // set baro drift amount
     void set_baro_drift_altitude(float alt) { _alt_offset.set(alt); }
 

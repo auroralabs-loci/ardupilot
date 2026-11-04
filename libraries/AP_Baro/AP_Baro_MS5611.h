@@ -95,6 +95,15 @@ private:
 
     bool _discard_next;
 
+#if AP_BARO_PROM_BACKUP_ENABLED
+    bool _on_board_bus() const;
+    bool _save_prom;
+    bool _using_stored_prom;
+    bool _prom_logged;
+    uint16_t _prom_read[8];
+    uint16_t _prom_used[8];
+#endif
+
     virtual bool _read_prom(uint16_t *prom) = 0;
     virtual void _calculate() = 0;
 };
