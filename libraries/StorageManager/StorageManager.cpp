@@ -28,6 +28,7 @@
 #include <GCS_MAVLink/GCS.h>
 
 #include "StorageManager.h"
+#include "PersistentStorage.h"
 
 #include <stdio.h>
 
@@ -87,15 +88,15 @@ const StorageManager::StorageArea StorageManager::layout[STORAGE_NUM_AREAS] = {
     { StorageParam,    8192,  6144},
     { StorageCANDNA,   14336, 1024},
 #endif
-#if STORAGE_NUM_AREAS >= 15
+#if STORAGE_NUM_AREAS >= 16
     { StorageParam,    8192,  1280},
     { StorageRally,    9472,   300},
     { StorageFence,    9772,   256},
     { StorageMission,  10028,  5204}, // leave 128 byte gap for expansion
     { StorageCANDNA,   15232,  1024},
-    // 128 byte gap at end of first 16k
+    { StoragePersistent, 16256, 128},
 #endif
-#if STORAGE_NUM_AREAS >= 18
+#if STORAGE_NUM_AREAS >= 19
     { StorageParam,    16384, 1280},
     { StorageMission,  17664, 9842},
     { StorageParamBak, 27506, 5262},
@@ -108,9 +109,16 @@ const StorageManager::StorageArea StorageManager::layout[STORAGE_NUM_AREAS] = {
  */
 void StorageManager::erase(void)
 {
+    // keep the persistent records, including any left elsewhere in
+    // storage by an older layout
+    uint8_t persistent[PersistentStorage::MAX_SIZE];
+    const uint16_t persistent_used = PersistentStorage::recover(persistent, PersistentStorage::load(persistent));
+
     if (!hal.storage->erase()) {
         ::printf("StorageManager: erase failed\n");
     }
+
+    PersistentStorage::store(persistent, 0, persistent_used);
 }
 
 /*

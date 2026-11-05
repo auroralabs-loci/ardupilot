@@ -20,7 +20,9 @@
 
 #include <AP_Math/AP_Math.h>
 #include <AP_Math/crc.h>
+#include <AP_HAL/I2CDevice.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
+#include <AP_Logger/AP_Logger.h>
 
 extern const AP_HAL::HAL &hal;
 
@@ -161,6 +163,12 @@ bool AP_Baro_MS56XX::_init()
     _dev->set_device_type(devtype());
     set_bus_id(_instance, _dev->get_bus_id());
 
+#if AP_BARO_PROM_BACKUP_ENABLED
+    if (_save_prom) {
+        _frontend.save_prom(prom, _dev->get_bus_id_devtype(0));
+    }
+#endif
+
     // lower retries for run
     _dev->set_retries(3);
     
@@ -212,14 +220,50 @@ bool AP_Baro_MS56XX::_read_prom_5611(uint16_t prom[8])
         return false;
     }
 
+#if AP_BARO_PROM_BACKUP_ENABLED
+    memcpy(_prom_read, prom, sizeof(_prom_read));
+#endif
+
     /* save the read crc */
     const uint16_t crc_read = prom[7] & 0xf;
 
     /* remove CRC byte */
-    prom[7] &= 0xff00;
+    uint16_t crc_check[8];
+    memcpy(crc_check, prom, sizeof(crc_check));
+    crc_check[7] &= 0xff00;
 
-    return crc_read == crc_crc4(prom);
+    if (crc_read == crc_crc4(crc_check)) {
+#if AP_BARO_PROM_BACKUP_ENABLED
+        _save_prom = _on_board_bus();
+#endif
+        return true;
+    }
+
+#if AP_BARO_PROM_BACKUP_ENABLED
+    if (_on_board_bus() && _frontend.find_stored_prom(prom, _dev->get_bus_id_devtype(0))) {
+        _using_stored_prom = true;
+        memcpy(_prom_used, prom, sizeof(_prom_used));
+        return true;
+    }
+#endif
+    return false;
 }
+
+#if AP_BARO_PROM_BACKUP_ENABLED
+// a PROM backup is only kept for sensors on the board itself: SPI or
+// an internal I2C bus
+bool AP_Baro_MS56XX::_on_board_bus() const
+{
+    switch (_dev->bus_type()) {
+    case AP_HAL::Device::BUS_TYPE_SPI:
+        return true;
+    case AP_HAL::Device::BUS_TYPE_I2C:
+        return (hal.i2c_mgr->get_bus_mask_internal() & (1U << _dev->bus_num())) != 0;
+    default:
+        return false;
+    }
+}
+#endif
 
 bool AP_Baro_MS56XX::_read_prom_5637(uint16_t prom[8])
 {
@@ -327,6 +371,23 @@ void AP_Baro_MS56XX::update()
 {
     uint32_t sD1, sD2;
     uint8_t d1count, d2count;
+
+#if AP_BARO_PROM_BACKUP_ENABLED && HAL_LOGGING_ENABLED
+    // log the PROM every boot so it can be recovered from old logs
+    if (!_prom_logged && AP::logger().logging_started()) {
+        const unsigned inst = _instance + 1;
+        const uint16_t *p = _prom_read;
+        AP::logger().Write_MessageF("Baro%u: PROM %04X %04X %04X %04X %04X %04X %04X %04X", inst,
+                                    p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+        if (_using_stored_prom) {
+            p = _prom_used;
+            AP::logger().Write_MessageF("Baro%u: PROM CRC fail, using stored PROM", inst);
+            AP::logger().Write_MessageF("Baro%u: stored %04X %04X %04X %04X %04X %04X %04X %04X", inst,
+                                        p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+        }
+        _prom_logged = true;
+    }
+#endif
 
     {
         WITH_SEMAPHORE(_sem);
